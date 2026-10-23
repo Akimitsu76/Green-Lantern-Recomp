@@ -22,8 +22,9 @@
 - Relatórios de análise só são associados ao mesmo hash de origem e PE normalizado
   correspondente. Compilação C++ usa incremento do Ninja; relatórios de preparação
   continuam recalculando hash/diagnóstico. Não há retomada automática de jobs.
-- GUI mantém Compilar/Iniciar desabilitados para o jogo; **Jogar agora** abre o
-  build local validado. Os alvos 30/60/ilimitado e os presets
+- A GUI usa **Gerar port nativo** para produzir o host ReXGlue e **Jogar agora**
+  para abrir o build local validado. Os controles do backend nativo próprio do
+  Aster continuam desabilitados. Os alvos 30/60/ilimitado e os presets
   Baixa/Padrão/Alta/Ultra/Personalizada ficam na aba **Gráficos**. 60 e
   ilimitado são opt-in, com confirmação e perfis isolados; 30 fps continua o
   padrão. Preparar mostra análise validada e experimento nativo quando

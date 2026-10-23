@@ -6,13 +6,17 @@ import sys
 
 def project_root(source):
     if getattr(sys, 'frozen', False):
+        if os.environ.get('ASTER_LAUNCHER_ROOT'):
+            return Path(os.environ['ASTER_LAUNCHER_ROOT']).resolve()
         return Path(sys.executable).resolve().parent / 'app'
     return Path(source).resolve().parents[1]
 
 
 def python_command(script, *arguments):
     if getattr(sys, 'frozen', False):
-        return [sys.executable, '--aster-script', str(script), *map(str, arguments)]
+        executable = os.environ.get('APPIMAGE', sys.executable)
+        runtime = ['--appimage-extract-and-run'] if os.environ.get('APPIMAGE') else []
+        return [executable, *runtime, '--aster-script', str(script), *map(str, arguments)]
     return [sys.executable, str(script), *map(str, arguments)]
 
 

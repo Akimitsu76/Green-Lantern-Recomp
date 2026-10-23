@@ -1,4 +1,8 @@
-# Aster Native
+# Aster Native — histórico do projeto
+
+> Documento histórico. Contagens de testes, caminhos e estados descritos abaixo
+> pertencem à etapa em que foram registrados. Para o estado atual, comece pelo
+> [README](../README.md) e por [PORTABLE_BUILD.md](PORTABLE_BUILD.md).
 
 Framework experimental de portabilidade e launcher desktop original, com módulo
 inicial para **Green Lantern: Rise of the Manhunters (Xbox 360)**.

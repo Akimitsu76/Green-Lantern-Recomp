@@ -23,6 +23,24 @@ do jogo. O port é gerado **localmente a partir do seu dump**.
 
 ## Primeiro uso
 
+### Arquivo único (recomendado)
+
+Baixe `AsterNative-windows-x64.exe` ou `AsterNative-linux-x86_64.AppImage`.
+O `.exe` abre diretamente. No Linux, dê permissão de execução ao AppImage e
+abra-o. Não é necessário extrair um ZIP nem manter pastas ao lado do arquivo.
+O AppImage usa FUSE; se o sistema não o oferecer, execute
+`./AsterNative-linux-x86_64.AppImage --appimage-extract-and-run`.
+
+Os recursos públicos são instalados automaticamente na pasta de dados do usuário:
+`%LOCALAPPDATA%/AsterNative/app` no Windows e
+`${XDG_DATA_HOME:-~/.local/share}/aster-native/app` no Linux.
+Builds, downloads, preferências e saves ficam em `.aster` dentro dessa pasta,
+preservados entre aberturas e atualizações. Mover o arquivo baixado não apaga os
+dados. O primeiro uso e a geração precisam de espaço livre nessa pasta.
+Os requisitos de Clang/C++23 e do dump continuam os mesmos.
+
+### Pacotes em pasta (formato anterior)
+
 1. Extraia **toda** a pasta `AsterNative` do ZIP (Windows) ou TAR.GZ (Linux)
    em um local gravável. Mantenha `app` e `_internal` ao lado do executável.
 2. Abra `AsterNative.exe` no Windows ou `AsterNative` no Linux. Não é necessário

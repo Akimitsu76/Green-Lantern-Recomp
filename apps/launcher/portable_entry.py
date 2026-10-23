@@ -39,6 +39,12 @@ def main():
                 except OSError:
                     stream = open(os.devnull, 'w')
                 setattr(sys, name, stream)
+    if getattr(sys, 'frozen', False):
+        payload = Path(sys._MEIPASS) / 'aster-payload.zip'
+        if payload.is_file():
+            from native_port.portable import install_payload, user_data_root
+            root = install_payload(payload, user_data_root() / 'app')
+            os.environ['ASTER_LAUNCHER_ROOT'] = str(root)
     if not (root / 'games/green_lantern_rex_hints.toml').is_file():
         raise SystemExit('Extraia o pacote completo antes de abrir o launcher; a pasta app está ausente.')
     sys.path.insert(0, str(root))

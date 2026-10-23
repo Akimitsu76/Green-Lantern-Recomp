@@ -20,6 +20,55 @@ PUBLIC_SCRIPTS = ['play_green_lantern.py']
 FORBIDDEN_SUFFIXES = {'.xex', '.iso', '.xexp', '.lvl_760', '.pdb', '.xdb', '.vkcache', '.usm'}
 
 
+def single_file(bundle, work, output, command, env, root, args):
+    payload = work / 'aster-payload.zip'
+    with zipfile.ZipFile(payload, 'w', compression=zipfile.ZIP_DEFLATED) as z:
+        for p in (bundle / 'app').rglob('*'):
+            if p.is_file():
+                z.write(p, p.relative_to(bundle / 'app'))
+        for p in (bundle / 'LICENSES').rglob('*'):
+            if p.is_file():
+                z.write(p, Path('LICENSES') / p.relative_to(bundle / 'LICENSES'))
+    if os.name == 'nt':
+        packed = list(command)
+        packed[packed.index('--onedir')] = '--onefile'
+        packed[packed.index('--name') + 1] = 'AsterNative-windows-x64'
+        packed[packed.index('--distpath') + 1] = str(output)
+        packed[packed.index('--workpath') + 1] = str(work / 'onefile-build')
+        packed[-1:-1] = ['--add-data', str(payload) + os.pathsep + '.']
+        subprocess.run(packed, check=True, cwd=root, env=env)
+        artifact = output / 'AsterNative-windows-x64.exe'
+    else:
+        if not args.appimagetool or not args.appimage_runtime:
+            raise ValueError('--single-file Linux requires --appimagetool and --appimage-runtime')
+        appdir = work / 'AppDir'
+        # Only public packaged files are copied. No generated game build enters AppDir.
+        if appdir.exists():
+            shutil.rmtree(appdir)
+        appdir.mkdir()
+        shutil.copy2(bundle / 'AsterNative', appdir / 'AsterNative')
+        shutil.copytree(bundle / '_internal', appdir / '_internal')
+        shutil.copy2(payload, appdir / '_internal/aster-payload.zip')
+        (appdir / 'AppRun').write_text('#!/bin/sh\nexec "$APPDIR/AsterNative" "$@"\n')
+        (appdir / 'AppRun').chmod(0o755)
+        (appdir / 'aster-native.desktop').write_text(
+            '[Desktop Entry]\nType=Application\nName=Aster Native\n'
+            'Exec=AsterNative\nIcon=aster-native\nCategories=Game;\nTerminal=false\n')
+        (appdir / 'aster-native.svg').write_text(
+            '<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">'
+            '<rect width="256" height="256" rx="48" fill="#101e20"/>'
+            '<path d="M128 40 222 216h-42l-18-36H94l-18 36H34L128 40zm0 74-20 34h40z" fill="#71eea2"/></svg>')
+        artifact = output / 'AsterNative-linux-x86_64.AppImage'
+        app_env = env.copy()
+        app_env.update({'ARCH': 'x86_64', 'APPIMAGE_EXTRACT_AND_RUN': '1'})
+        subprocess.run([str(args.appimagetool.resolve()), '--runtime-file',
+                        str(args.appimage_runtime.resolve()), str(appdir), str(artifact)],
+                       check=True, env=app_env, cwd=root)
+        artifact.chmod(0o755)
+    print(json.dumps({'single_file': str(artifact), 'bytes': artifact.stat().st_size,
+                      'sha256': hashlib.sha256(artifact.read_bytes()).hexdigest()}))
+
+
 def copy_public(root, destination):
     destination.mkdir(parents=True, exist_ok=True)
     copied = []
@@ -55,6 +104,9 @@ def main():
     parser.add_argument('--output', type=Path, default=Path('dist'))
     parser.add_argument('--cmake-data', type=Path)
     parser.add_argument('--ninja', type=Path)
+    parser.add_argument('--single-file', action='store_true')
+    parser.add_argument('--appimagetool', type=Path)
+    parser.add_argument('--appimage-runtime', type=Path)
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[1]
     output = args.output.resolve()
@@ -114,6 +166,11 @@ def main():
             for terms in base.glob('*/license.terms'):
                 shutil.copy2(terms, licenses / ('TclTk-' + terms.parent.name + '.txt'))
     shutil.copy2(root / 'docs/THIRD_PARTY_NOTICES.md', bundle / 'THIRD_PARTY_NOTICES.md')
+    if args.appimage_runtime:
+        runtime_license = args.appimage_runtime.parent / 'appimage-runtime-LICENSE'
+        if not runtime_license.is_file():
+            raise ValueError('Supply appimage-runtime-LICENSE alongside the AppImage runtime')
+        shutil.copy2(runtime_license, licenses / 'AppImage-runtime-LICENSE')
     notice = bundle / 'LEIA-ME.txt' 
     notice.write_text('Aster Native - launcher experimental\n\n'
         'Extraia TODA a pasta. Abra AsterNative.exe (Windows) ou AsterNative (Linux).\n'
@@ -129,6 +186,9 @@ def main():
                 'files': {str(p.relative_to(bundle)): hashlib.sha256(p.read_bytes()).hexdigest()
                           for p in bundle.rglob('*') if p.is_file()}}
     (bundle / 'PACKAGE.json').write_text(json.dumps(manifest, indent=2) + '\n')
+    if args.single_file:
+        single_file(bundle, work, output, command, env, root, args)
+        return
     if os.name == 'nt':
         archive = output / 'AsterNative-windows-x64.zip'
         with zipfile.ZipFile(archive, 'w', compression=zipfile.ZIP_DEFLATED) as z:

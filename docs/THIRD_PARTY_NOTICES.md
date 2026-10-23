@@ -9,6 +9,10 @@ As licenças fornecidas pelos componentes são copiadas para `LICENSES` no pacot
 O Python Linux é proveniente de `astral-sh/python-build-standalone`; o Python
 Windows é o instalador oficial de python.org, preparado em prefixo Wine isolado.
 
+O AppImage também inclui o runtime oficial `AppImage/type2-runtime`.
+Seu aviso de licença acompanha os recursos em `LICENSES/AppImage-runtime-LICENSE`.
+O appimagetool é usado apenas para empacotar, sem ser incorporado ao launcher.
+
 ReXGlue SDK 0.10.0 é baixado separadamente do release oficial
 https://github.com/rexglue/rexglue-sdk/releases/tag/v0.10.0, com hashes fixados.
 O SDK e os derivados Xenia usam a licença BSD indicada em seu arquivo LICENSE.

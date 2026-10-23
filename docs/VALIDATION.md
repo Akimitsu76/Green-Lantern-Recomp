@@ -1,5 +1,17 @@
 # Validação executada — 22–23/10/2026
 
+## Arquivos únicos — 23/10/2026
+
+O empacotamento agora produz `dist/AsterNative-windows-x64.exe` e
+`dist/AsterNative-linux-x86_64.AppImage`. Recursos públicos são instalados na
+pasta de dados do usuário, com builds e preferências persistentes em `.aster`.
+Não é necessário extrair ZIP nem manter diretórios ao lado do arquivo baixado.
+
+163 testes passaram sem falhas/skips em Xvfb. Os testes novos verificam atualização
+de recursos preservando dados do usuário, extração segura, permissões de ferramentas
+e caminhos persistentes de workers. A validação Windows continua limitada ao
+launcher sob Wine, sem certificar a compilação ou o jogo em Windows real.
+
 ## Atualização — gerador portátil (23/10/2026)
 
 O estado atual está em [PORTABLE_BUILD.md](PORTABLE_BUILD.md). O fluxo real

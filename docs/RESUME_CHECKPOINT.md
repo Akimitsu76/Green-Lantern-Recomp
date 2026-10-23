@@ -1,5 +1,9 @@
 # Ponto de retomada — 22–23/10/2026
 
+> Documento histórico de uma etapa de desenvolvimento. Para o estado e os
+> downloads atuais, consulte [PORTABLE_BUILD.md](PORTABLE_BUILD.md) e
+> [SINGLE_FILE_RELEASE.md](SINGLE_FILE_RELEASE.md).
+
 ## Atualização — gerador portátil (23/10/2026)
 
 O estado atual está em [PORTABLE_BUILD.md](PORTABLE_BUILD.md). O fluxo real
