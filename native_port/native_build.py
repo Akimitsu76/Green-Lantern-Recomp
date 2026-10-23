@@ -1,0 +1,341 @@
+"""Generate and compile a local port from the supported, user-provided XEX.
+
+No generated source or game binary is shipped. Downloads are pinned SDK tools.
+The build lives in a new content-addressed directory, never in the old builds.
+"""
+from __future__ import annotations
+import hashlib
+import json
+import os
+from pathlib import Path, PurePosixPath
+import platform
+import re
+import shutil
+import stat
+import tempfile
+import urllib.request
+import zipfile
+
+from .errors import PortError
+from .paths import external_env
+from .sources import digest_source, inspect_source
+from .tasks import Cancellation, run_process
+from .workspace import Workspace
+
+XEX_SHA256 = '3218a70a78f2d258cd236c204ddbca0cee21c197d6de463f68f6e504385852d1'
+SDK_VERSION = '0.10.0'
+SDK_ASSETS = {
+    'linux-amd64': '0388edb3f8fb1444f1b0ad5d440cb02d9690ac20a76b04fd6b7dcc19f59328a6',
+    'win-amd64': 'ad4485da853fbe932e9f5dbb643f9b5fe85dc73775ebbad4df6879fe6df0c11b',
+}
+INSTALL = 'config/native-install.json'
+
+
+def host_platform():
+    if platform.machine().lower() not in ('amd64', 'x86_64'):
+        raise PortError('BUILD_PLATFORM', 'O port atual requer um PC x86-64.')
+    if os.name == 'nt':
+        return 'win-amd64'
+    if platform.system() == 'Linux':
+        return 'linux-amd64'
+    raise PortError('BUILD_PLATFORM', 'Geração disponível para Linux x86-64 e Windows x64.')
+
+
+def file_hash(path):
+    return digest_source(path, Cancellation())
+
+
+def safe_extract(archive, destination):
+    """Reject absolute paths, traversal, links and unexpectedly large archives."""
+    with zipfile.ZipFile(archive) as package:
+        members = package.infolist()
+        if sum(m.file_size for m in members) > 3 * 1024**3:
+            raise PortError('SDK_ARCHIVE', 'SDK excede o limite de extração.')
+        for member in members:
+            name = PurePosixPath(member.filename.replace('\\', '/'))
+            mode = member.external_attr >> 16
+            if (name.is_absolute() or '..' in name.parts or ':' in str(name)
+                    or stat.S_ISLNK(mode)):
+                raise PortError('SDK_ARCHIVE', 'Arquivo inseguro no pacote do SDK.')
+        package.extractall(destination)
+        for member in members:
+            mode = member.external_attr >> 16
+            if mode & stat.S_IXUSR and not member.is_dir():
+                (destination / member.filename).chmod(0o755)
+
+
+def ensure_sdk(work, cancel, emit, allow_download=False):
+    target = host_platform()
+    prefix = work.path(f'tools/rexglue-{SDK_VERSION}/{target}')
+    generator = prefix / 'bin' / ('rexglue.exe' if os.name == 'nt' else 'rexglue')
+    if generator.is_file() and (prefix / 'lib/cmake/rexglue').is_dir():
+        return prefix
+    if not allow_download:
+        raise PortError('SDK_MISSING', 'SDK ausente. Habilite baixar SDK oficial e tente novamente.')
+    filename = f'rexglue-sdk-{SDK_VERSION}-{target}.zip'
+    archive = work.path(f'tools/downloads/{filename}')
+    archive.parent.mkdir(parents=True, exist_ok=True)
+    if not archive.is_file() or file_hash(archive) != SDK_ASSETS[target]:
+        url = f'https://github.com/rexglue/rexglue-sdk/releases/download/v{SDK_VERSION}/{filename}'
+        emit({'task': 'Baixar SDK oficial', 'state': 'running', 'message': url})
+        fd, temporary = tempfile.mkstemp(dir=archive.parent, prefix='.download-')
+        try:
+            with os.fdopen(fd, 'wb') as output, urllib.request.urlopen(url, timeout=30) as response:
+                while block := response.read(1024 * 1024):
+                    cancel.check()
+                    output.write(block)
+                    if output.tell() > 512 * 1024**2:
+                        raise PortError('SDK_DOWNLOAD', 'Pacote maior que o esperado.')
+            if file_hash(Path(temporary)) != SDK_ASSETS[target]:
+                raise PortError('SDK_HASH', 'O hash do SDK não corresponde à versão fixada.')
+            os.replace(temporary, archive)
+        finally:
+            Path(temporary).unlink(missing_ok=True)
+    prefix.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=prefix.parent) as temporary:
+        safe_extract(archive, Path(temporary))
+        extracted = Path(temporary) / target
+        if not (extracted / 'bin' / generator.name).is_file():
+            raise PortError('SDK_ARCHIVE', 'SDK sem gerador esperado.')
+        # Existing incomplete directories are retained for diagnosis.
+        if prefix.exists():
+            raise PortError('SDK_INCOMPLETE', f'SDK incompleto preservado em {prefix}; selecione outro workspace.')
+        shutil.move(str(extracted), prefix)
+    return prefix
+
+
+def toolchain(root, work):
+    suffix = '.exe' if os.name == 'nt' else ''
+    env = external_env()
+    if os.name == 'nt':
+        env = {key.upper(): value for key, value in env.items()}
+    if os.name == 'nt' and not env.get('VCTOOLSINSTALLDIR'):
+        finder = Path(env.get('PROGRAMFILES(X86)', 'C:/Program Files (x86)')) / 'Microsoft Visual Studio/Installer/vswhere.exe'
+        if finder.is_file():
+            result = run_process([str(finder), '-latest', '-products', '*', '-requires',
+                                  'Microsoft.VisualStudio.Component.VC.Tools.x86.x64',
+                                  '-property', 'installationPath'], root, Cancellation(), env=env)
+            installation = result['stdout'].strip()
+            vcvars = Path(installation) / 'VC/Auxiliary/Build/vcvars64.bat'
+            if vcvars.is_file():
+                result = run_process(['cmd.exe', '/d', '/s', '/c', f'""{vcvars}" >nul && set"'],
+                                     root, Cancellation(), env=env)
+                env.update((line.split('=', 1)[0].upper(), line.split('=', 1)[1]) for line in result['stdout'].splitlines() if '=' in line and not line.startswith('='))
+                llvm = Path(installation) / 'VC/Tools/Llvm/x64/bin'
+                env['PATH'] = str(llvm) + os.pathsep + env.get('PATH', '')
+    def find(name):
+        candidates = [root / f'tools/{name}/bin/{name}{suffix}',
+                      root / f'tools/{name}/{name}{suffix}']
+        if name == 'cmake':
+            candidates.append(work.path(f'tools/cmake-runtime/cmake/data/bin/cmake{suffix}'))
+        return next((str(p) for p in candidates if p.is_file()), None) or shutil.which(name, path=env.get('PATH'))
+    cmake, ninja = find('cmake'), find('ninja')
+    compiler = shutil.which('clang-cl' if os.name == 'nt' else 'clang++', path=env.get('PATH'))
+    missing = [name for name, value in [('CMake >=3.25', cmake), ('Ninja', ninja), ('Clang >=18 + C++23', compiler)] if not value]
+    if os.name == 'nt' and not env.get('VCTOOLSINSTALLDIR'):
+        missing.append('Visual Studio Build Tools: C++ x64 + Windows SDK + Clang')
+    if missing:
+        raise PortError('BUILD_TOOLS', 'Instale as ferramentas de compilação: ' + ', '.join(missing)
+                        + '. Veja docs/PORTABLE_BUILD.md. O launcher e os saves foram preservados.')
+    return cmake, ninja, compiler, env
+
+
+def read_install(root):
+    path = Path(root) / '.aster' / INSTALL
+    if not path.is_file():
+        return None
+    try:
+        if path.stat().st_size > 1024 * 1024:
+            raise ValueError('manifest too large')
+        data = json.loads(path.read_text())
+        if data.get('schema') != 1 or data.get('xex_sha256') != XEX_SHA256 or data.get('state') != 'built':
+            raise ValueError('invalid manifest')
+        if (not isinstance(data.get('files'), dict) or not isinstance(data.get('binary'), str)
+                or data['binary'] not in data['files'] or not isinstance(data.get('game_root'), str)
+                or data.get('renderer') not in ('vulkan-fsi', 'd3d12-rov')
+                or any(not isinstance(k, str) or not isinstance(v, str) or not re.fullmatch(r'[0-9a-f]{64}', v)
+                       for k, v in data['files'].items())):
+            raise ValueError('invalid artifacts')
+        for value in [data['binary'], *data['files']]:
+            p = (Path(root) / value).resolve()
+            if not p.is_relative_to((Path(root) / '.aster').resolve()):
+                raise ValueError('path outside workspace')
+        return data
+    except (ValueError, KeyError, TypeError, OSError) as exc:
+        raise PortError('BUILD_MANIFEST', 'Manifesto do build local inválido: ' + str(exc)) from exc
+
+
+def verify_install(root, data):
+    if data.get('platform') != host_platform():
+        raise PortError('BUILD_PLATFORM', 'Este port foi compilado para outro sistema operacional.')
+    for relative, expected in data['files'].items():
+        p = (Path(root) / relative).resolve()
+        if not p.is_relative_to((Path(root) / '.aster').resolve()) or not p.is_file() or file_hash(p) != expected:
+            raise PortError('BUILD_CHANGED', f'Arquivo do port ausente ou alterado: {relative}. Gere-o novamente.')
+
+
+def _build_native(source, workspace, cancel=None, emit=None, jobs=2, allow_download=False):
+    cancel, emit = cancel or Cancellation(), emit or (lambda event: None)
+    root = workspace.project
+    if workspace.root != root / '.aster':
+        raise PortError('BUILD_WORKSPACE', 'A geração nativa usa o workspace .aster padrão do launcher.')
+    if type(jobs) is not int or not 1 <= jobs <= 64:
+        raise PortError('BUILD_JOBS', 'Número de tarefas inválido.')
+    info = inspect_source(source, cancel)
+    if not info.get('game_directory') or Path(info['path']).name.lower() != 'default.xex':
+        raise PortError('BUILD_DUMP', 'Selecione a pasta extraída contendo default.xex e os assets.')
+    game, xex = Path(info['game_directory']), Path(info['path'])
+    if workspace.root.is_relative_to(game) or game.is_relative_to(workspace.root):
+        raise PortError('SOURCE_OVERLAP', 'O dump deve ficar fora do workspace.')
+    emit({'task': 'Verificar dump', 'state': 'running'})
+    if digest_source(xex, cancel) != XEX_SHA256:
+        raise PortError('BUILD_REVISION', 'Revisão do XEX ainda não suportada. O original não foi alterado.')
+    hints = root / 'games/green_lantern_rex_hints.toml'
+    hook = root / 'integrations/rexglue/portable_timing.cpp'
+    recipe = {'sdk': SDK_VERSION, 'platform': host_platform(), 'xex': XEX_SHA256,
+              'hints': file_hash(hints), 'hook': file_hash(hook), 'integration': 4,
+              'cache_project': file_hash(root / 'integrations/rexglue/plugin-only/CMakeLists.txt') if os.name != 'nt' else None,
+              'driver_cache_patch': file_hash(root / 'integrations/rexglue/patches/0001-vulkan-driver-pipeline-cache.patch') if os.name != 'nt' else None}
+    key = hashlib.sha256(json.dumps(recipe, sort_keys=True).encode()).hexdigest()[:20]
+    try:
+        current = read_install(root)
+    except PortError:
+        import time
+        backup = workspace.path(f'reports/native-install-invalid-{time.time_ns()}.json')
+        backup.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(root / '.aster' / INSTALL, backup)
+        current = None
+    if current and current.get('recipe') == recipe:
+        try:
+            verify_install(root, current)
+            if current.get('game_root') != str(game):
+                current['game_root'] = str(game)
+                workspace.write_json(INSTALL, current)
+            emit({'task': 'Port já compilado', 'state': 'completed', 'message': 'Cache de compilação íntegro; nada foi recompilado.'})
+            return current
+        except PortError:
+            pass
+    cmake, ninja, compiler, env = toolchain(root, workspace)
+    prefix = ensure_sdk(workspace, cancel, emit, allow_download)
+    generator = prefix / 'bin' / ('rexglue.exe' if os.name == 'nt' else 'rexglue')
+    project = workspace.path(f'native/{key}/project')
+    build = workspace.path(f'native/{key}/build')
+    logs = workspace.path(f'native/{key}/logs')
+    logs.mkdir(parents=True, exist_ok=True)
+    def run(name, command, timeout=7200):
+        cancel.check()
+        emit({'task': name, 'state': 'running', 'message': name})
+        try:
+            result = run_process(list(map(str, command)), root, cancel, timeout=timeout, env=env)
+        except PortError as exc:
+            workspace.write_json(f'native/{key}/logs/failure.json', exc.as_dict())
+            raise
+        (logs / (re.sub(r'[^a-zA-Z0-9]+', '-', name) + '.log')).write_text(result['stdout'] + result['stderr'])
+        emit({'task': name, 'state': 'completed'})
+    cache_plugin = None
+    if os.name != 'nt':
+        from .native_cache import build_cache_plugin
+        cache_plugin = build_cache_plugin(root, workspace, prefix, (cmake, ninja, compiler, env),
+                                          cancel, emit, run, allow_download)
+    manifest = project / 'aster_green_lantern_manifest.toml'
+    if not manifest.is_file():
+        run('Criar projeto nativo', [generator, 'init', '--project-name', 'aster_green_lantern',
+                                    '--xex-path', xex, '--game-root', game, '--project-root', project])
+        shutil.copy2(hints, project / 'hints.toml')
+        # SDK init lowercases asset paths and emits an empty includes list.
+        # Preserve the actual case on Linux and write one unambiguous manifest.
+        def relative(path):
+            try:
+                return Path(os.path.relpath(path, project)).as_posix()
+            except ValueError:  # Different Windows drives.
+                return path.as_posix()
+        manifest.write_text('[project]\nname = "aster_green_lantern"\nsdk_version = "0.10.0"\n'
+                            + 'game_root = ' + json.dumps(relative(game), ensure_ascii=False) + '\n\n'
+                            + '[entrypoint]\nfile_path = ' + json.dumps(relative(xex), ensure_ascii=False)
+                            + '\nout_directory_path = "generated/default"\nincludes = ["hints.toml"]\n')
+        shutil.copy2(hook, project / 'aster_timing.cpp')
+        cmake_file = project / 'CMakeLists.txt'
+        content = cmake_file.read_text()
+        content = content.replace('rexglue_setup_target(aster_green_lantern)',
+                                  'rexglue_setup_target(aster_green_lantern GPU_PLUGINS xenos)')
+        content += '\ntarget_sources(aster_green_lantern PRIVATE aster_timing.cpp)\n'
+        cmake_file.write_text(content)
+    stamp = project / 'aster-codegen.json'
+    valid_codegen = False
+    if stamp.is_file():
+        try:
+            recorded = json.loads(stamp.read_text())
+            valid_codegen = bool(recorded) and all(
+                (project / name).resolve().is_relative_to((project / 'generated').resolve())
+                and (project / name).is_file() and file_hash(project / name) == sha
+                for name, sha in recorded.items())
+        except (ValueError, OSError, AttributeError):
+            pass
+    if not valid_codegen:
+        run('Recompilar PowerPC para C++', [generator, 'codegen', manifest])
+        generated = [p for p in (project / 'generated').rglob('*') if p.is_file()]
+        if not generated:
+            raise PortError('BUILD_CODEGEN', 'O gerador não produziu arquivos C++.')
+        stamp.write_text(json.dumps({str(p.relative_to(project)): file_hash(p) for p in generated}))
+    else:
+        emit({'task': 'Reutilizar C++ já gerado', 'state': 'completed'})
+    run('Configurar build', [cmake, '-S', project, '-B', build, '-G', 'Ninja',
+                             '-DCMAKE_BUILD_TYPE=RelWithDebInfo', f'-DCMAKE_PREFIX_PATH={prefix}',
+                             f'-DCMAKE_CXX_COMPILER={compiler}', f'-DCMAKE_MAKE_PROGRAM={ninja}',
+                             '-DCMAKE_FIND_USE_PACKAGE_REGISTRY=OFF', '-DCMAKE_FIND_USE_SYSTEM_PACKAGE_REGISTRY=OFF'])
+    run('Compilar port local', [cmake, '--build', build, '--parallel', str(jobs)])
+    suffix = '.exe' if os.name == 'nt' else ''
+    binary = build / ('aster_green_lantern' + suffix)
+    if not binary.is_file():
+        raise PortError('BUILD_ARTIFACT', 'A compilação não gerou o executável esperado.')
+    for directory in [prefix / 'bin', prefix / 'lib']:
+        for library in directory.iterdir():
+            if library.is_file() and (library.suffix == '.dll' if os.name == 'nt' else '.so' in library.name):
+                shutil.copy2(library, build / library.name)
+    if cache_plugin:
+        shutil.copy2(cache_plugin, build / cache_plugin.name)
+    if os.name != 'nt':
+        run('Verificar bibliotecas', ['ldd', binary], timeout=30)
+        result = run_process(['ldd', str(binary)], root, cancel, timeout=30, env=env)
+        if 'not found' in result['stdout'] + result['stderr']:
+            raise PortError('BUILD_DEPENDENCIES', 'Faltam bibliotecas de execução: ' + result['stdout'])
+    if digest_source(xex, cancel) != XEX_SHA256:
+        raise PortError('SOURCE_CHANGED', 'O XEX foi alterado durante a compilação.')
+    artifacts = [binary, *[p for p in build.iterdir() if p.is_file() and
+                          (p.suffix == '.dll' if os.name == 'nt' else '.so' in p.name)]]
+    data = {'schema': 1, 'state': 'built', 'ready': False, 'gameplay_verified': False,
+            'platform': host_platform(), 'recipe': recipe, 'xex_sha256': XEX_SHA256,
+            'game_root': str(game), 'binary': str(binary.relative_to(root)),
+            'files': {str(p.relative_to(root)): file_hash(p) for p in artifacts},
+            'renderer': 'd3d12-rov' if os.name == 'nt' else 'vulkan-fsi',
+            'message': 'Port compilado localmente; execução e campanha ainda precisam de validação.'}
+    workspace.write_json(INSTALL, data)
+    emit({'task': 'Port gerado', 'state': 'completed', 'message': data['message']})
+    return data
+
+
+def build_native(source, workspace, cancel=None, emit=None, jobs=2, allow_download=False):
+    # Validate the input before creating even a lock in the workspace.
+    cancel = cancel or Cancellation()
+    info = inspect_source(source, cancel)
+    if not info.get('game_directory'):
+        raise PortError('BUILD_DUMP', 'Selecione a pasta extraída com default.xex e os assets.')
+    if digest_source(info['path'], cancel) != XEX_SHA256:
+        raise PortError('BUILD_REVISION', 'Revisão do XEX ainda não suportada. O original não foi alterado.')
+    game = Path(info['game_directory']).resolve()
+    if workspace.root.is_relative_to(game) or game.is_relative_to(workspace.root):
+        raise PortError('SOURCE_OVERLAP', 'O dump deve ficar fora do workspace.')
+    from .locking import lock_session
+    lock = workspace.path('native/build.lock')
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        descriptor = lock_session(lock)
+    except BlockingIOError as exc:
+        raise PortError('BUILD_BUSY', 'Já existe uma geração do port neste workspace.') from exc
+    try:
+        try:
+            return _build_native(source, workspace, cancel, emit, jobs, allow_download)
+        except (OSError, zipfile.BadZipFile) as exc:
+            raise PortError('BUILD_IO', 'Falha de leitura/download/extração: ' + str(exc)) from exc
+    finally:
+        os.close(descriptor)

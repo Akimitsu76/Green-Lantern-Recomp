@@ -1,0 +1,15 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aster-native"
+version = "0.1.0"
+description = "Local source preparation framework for native port research"
+requires-python = ">=3.11"
+
+[project.scripts]
+aster-native = "native_port.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["native_port*", "games*"]

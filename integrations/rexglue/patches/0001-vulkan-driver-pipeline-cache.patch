@@ -1,0 +1,288 @@
+diff --git a/include/rex/graphics/vulkan/pipeline_cache.h b/include/rex/graphics/vulkan/pipeline_cache.h
+index 7b938b9..e1ece80 100644
+--- a/include/rex/graphics/vulkan/pipeline_cache.h
++++ b/include/rex/graphics/vulkan/pipeline_cache.h
+@@ -22,6 +22,7 @@
+ #include <mutex>
+ #include <queue>
+ #include <set>
++#include <shared_mutex>
+ #include <thread>
+ #include <unordered_map>
+ #include <utility>
+@@ -99,6 +100,10 @@ class VulkanPipelineCache {
+                                     bool* is_placeholder_out = nullptr) const;
+ 
+  private:
++  void InitializeDriverCache(const std::filesystem::path& cache_root, uint32_t title_id);
++  void SaveDriverCache();
++  void ShutdownDriverCache();
++
+   REXPACKEDSTRUCT(ShaderStoredHeader, {
+     uint64_t ucode_data_hash;
+ 
+@@ -429,6 +434,17 @@ class VulkanPipelineCache {
+   std::deque<std::pair<uint64_t, VkPipeline>> deferred_destroy_pipelines_;
+   std::mutex deferred_destroy_lock_;
+ 
++  // Shared access permits parallel internally synchronized Vulkan creation.
++  // Loading, serialization and destruction take exclusive access.
++  std::shared_mutex driver_cache_mutex_;
++  VkPipelineCache driver_cache_ = VK_NULL_HANDLE;
++  PFN_vkCreatePipelineCache create_driver_cache_ = nullptr;
++  PFN_vkGetPipelineCacheData get_driver_cache_data_ = nullptr;
++  PFN_vkDestroyPipelineCache destroy_driver_cache_ = nullptr;
++  std::filesystem::path driver_cache_path_;
++  std::atomic<uint64_t> driver_cache_generation_{0};
++  uint64_t driver_cache_saved_generation_ = 0;
++
+   // Currently open shader storage path.
+   std::filesystem::path shader_storage_cache_root_;
+   uint32_t shader_storage_title_id_ = 0;
+diff --git a/src/graphics/vulkan/pipeline_cache.cpp b/src/graphics/vulkan/pipeline_cache.cpp
+index 91ac08f..c8000ec 100644
+--- a/src/graphics/vulkan/pipeline_cache.cpp
++++ b/src/graphics/vulkan/pipeline_cache.cpp
+@@ -12,6 +12,7 @@
+ #include <algorithm>
+ #include <array>
+ #include <atomic>
++#include <chrono>
+ #include <cstdint>
+ #include <cstring>
+ #include <memory>
+@@ -388,9 +389,175 @@ bool VulkanPipelineCache::Initialize() {
+   return true;
+ }
+ 
++// Driver data is private to this machine; shareable .xsh/.xpso remain unchanged.
++// Envelope catches truncation/accidental corruption before handing opaque bytes
++// back to the driver. XXH3 is an integrity check, not an authenticity guarantee.
++namespace {
++constexpr uint64_t kDriverCacheMagic = 0x3145484341435841ull;  // AXCACHE1
++constexpr size_t kDriverCacheMaxBytes = 64 * 1024 * 1024;
++constexpr size_t kDriverCacheHeaderBytes = 32;  // Vulkan header version one.
++}
++
++void VulkanPipelineCache::InitializeDriverCache(const std::filesystem::path& cache_root,
++                                                 uint32_t title_id) {
++  std::unique_lock<std::shared_mutex> lock(driver_cache_mutex_);
++  const auto* vulkan_device = command_processor_.GetVulkanDevice();
++  const auto& ifn = vulkan_device->vulkan_instance()->functions();
++  const VkDevice device = vulkan_device->device();
++  create_driver_cache_ = reinterpret_cast<PFN_vkCreatePipelineCache>(
++      ifn.vkGetDeviceProcAddr(device, "vkCreatePipelineCache"));
++  get_driver_cache_data_ = reinterpret_cast<PFN_vkGetPipelineCacheData>(
++      ifn.vkGetDeviceProcAddr(device, "vkGetPipelineCacheData"));
++  destroy_driver_cache_ = reinterpret_cast<PFN_vkDestroyPipelineCache>(
++      ifn.vkGetDeviceProcAddr(device, "vkDestroyPipelineCache"));
++  if (!create_driver_cache_ || !get_driver_cache_data_ || !destroy_driver_cache_) {
++    REXGPU_WARN("VulkanPipelineCache: Driver cache entry points unavailable");
++    return;
++  }
++
++  VkPhysicalDeviceProperties properties;
++  ifn.vkGetPhysicalDeviceProperties(vulkan_device->physical_device(), &properties);
++  std::string uuid;
++  for (uint8_t byte : properties.pipelineCacheUUID) {
++    uuid += fmt::format("{:02X}", byte);
++  }
++  bool fsi = render_target_cache_.GetPath() == RenderTargetCache::Path::kPixelShaderInterlock;
++  auto directory = cache_root / "shaders" / "driver";
++  std::error_code error;
++  std::filesystem::create_directories(directory, error);
++  if (!error) {
++    driver_cache_path_ = directory / fmt::format(
++        "{:08X}.{}.v1.{}bit.{:08X}.{:08X}.{:08X}.{:08X}.{}.vkcache", title_id,
++        fsi ? "fsi" : "fbo", sizeof(void*) * 8, properties.vendorID, properties.deviceID,
++        properties.driverVersion, properties.apiVersion, uuid);
++  } else {
++    REXGPU_WARN("VulkanPipelineCache: Driver cache directory unavailable: {}", error.message());
++  }
++
++  std::vector<uint8_t> data;
++  if (!driver_cache_path_.empty()) {
++    uintmax_t file_size = std::filesystem::file_size(driver_cache_path_, error);
++    if (!error && file_size >= 24 + kDriverCacheHeaderBytes &&
++        file_size <= 24 + kDriverCacheMaxBytes) {
++      if (FILE* file = rex::filesystem::OpenFile(driver_cache_path_, "rb")) {
++        uint64_t envelope[3] = {};
++        bool valid = fread(envelope, sizeof(envelope), 1, file) == 1 &&
++                     envelope[0] == kDriverCacheMagic && envelope[1] == file_size - 24;
++        if (valid) {
++          data.resize(size_t(envelope[1]));
++          valid = fread(data.data(), data.size(), 1, file) == 1 &&
++                  XXH3_64bits(data.data(), data.size()) == envelope[2];
++        }
++        fclose(file);
++        // Version-one Vulkan header is four uint32_t fields followed by UUID.
++        uint32_t header[4] = {};
++        if (valid) {
++          std::memcpy(header, data.data(), sizeof(header));
++          valid = header[0] >= kDriverCacheHeaderBytes && header[0] <= data.size() &&
++                  header[1] == VK_PIPELINE_CACHE_HEADER_VERSION_ONE &&
++                  header[2] == properties.vendorID && header[3] == properties.deviceID &&
++                  std::memcmp(data.data() + 16, properties.pipelineCacheUUID, VK_UUID_SIZE) == 0;
++        }
++        if (!valid) {
++          data.clear();
++          REXGPU_WARN("VulkanPipelineCache: Ignoring invalid/incompatible driver cache");
++        }
++      }
++    } else if (!error) {
++      REXGPU_WARN("VulkanPipelineCache: Ignoring driver cache with invalid size {}", file_size);
++    }
++  }
++
++  VkPipelineCacheCreateInfo info = {};
++  info.sType = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO;
++  // No EXTERNALLY_SYNCHRONIZED flag: parallel creation uses Vulkan's default
++  // internal synchronization. Our exclusive lock also makes snapshots stable.
++  info.initialDataSize = data.size();
++  info.pInitialData = data.empty() ? nullptr : data.data();
++  VkResult result = create_driver_cache_(device, &info, nullptr, &driver_cache_);
++  if (result != VK_SUCCESS && !data.empty()) {
++    REXGPU_WARN("VulkanPipelineCache: Driver rejected cached data ({}), retrying empty", int(result));
++    driver_cache_ = VK_NULL_HANDLE;
++    info.initialDataSize = 0;
++    info.pInitialData = nullptr;
++    result = create_driver_cache_(device, &info, nullptr, &driver_cache_);
++  }
++  if (result != VK_SUCCESS) {
++    driver_cache_ = VK_NULL_HANDLE;
++    REXGPU_WARN("VulkanPipelineCache: Driver cache unavailable ({})", int(result));
++  } else {
++    REXGPU_INFO("VulkanPipelineCache: Driver cache initialized with {} bytes", info.initialDataSize);
++  }
++}
++
++void VulkanPipelineCache::SaveDriverCache() {
++  std::unique_lock<std::shared_mutex> lock(driver_cache_mutex_);
++  if (driver_cache_ == VK_NULL_HANDLE) {
++    return;
++  }
++  uint64_t generation = driver_cache_generation_.load(std::memory_order_relaxed);
++  if (generation == driver_cache_saved_generation_) {
++    return;
++  }
++  const VkDevice device = command_processor_.GetVulkanDevice()->device();
++  size_t size = 0;
++  if (!driver_cache_path_.empty() &&
++      get_driver_cache_data_(device, driver_cache_, &size, nullptr) == VK_SUCCESS &&
++      size >= kDriverCacheHeaderBytes && size <= kDriverCacheMaxBytes) {
++    std::vector<uint8_t> data(size);
++    VkResult result = get_driver_cache_data_(device, driver_cache_, &size, data.data());
++    // Exclusive lock excludes every create call between size and data queries.
++    // Discard VK_INCOMPLETE rather than persisting a partial snapshot.
++    if (result == VK_SUCCESS && size >= kDriverCacheHeaderBytes && size <= data.size()) {
++      data.resize(size);
++      uint64_t envelope[3] = {kDriverCacheMagic, uint64_t(size), XXH3_64bits(data.data(), size)};
++      auto temporary = driver_cache_path_;
++      temporary += fmt::format(".{}.{}.tmp", reinterpret_cast<uintptr_t>(this),
++          std::chrono::steady_clock::now().time_since_epoch().count());
++      if (FILE* file = rex::filesystem::OpenFile(temporary, "wbx")) {
++        bool written = fwrite(envelope, sizeof(envelope), 1, file) == 1 &&
++                       fwrite(data.data(), size, 1, file) == 1;
++        written = fflush(file) == 0 && written;
++        written = fclose(file) == 0 && written;
++        std::error_code error;
++        if (written) {
++          // Same-directory rename preserves the previous complete cache on a
++          // failed write. Never delete the old destination to force a rename.
++          std::filesystem::rename(temporary, driver_cache_path_, error);
++          written = !error;
++        }
++        if (written) {
++          driver_cache_saved_generation_ = generation;
++          REXGPU_INFO("VulkanPipelineCache: Persisted {} driver cache bytes", size);
++        } else {
++          REXGPU_WARN("VulkanPipelineCache: Driver cache snapshot not saved");
++        }
++        std::filesystem::remove(temporary, error);
++      }
++    } else {
++      REXGPU_WARN("VulkanPipelineCache: Driver cache snapshot incomplete ({})", int(result));
++    }
++  }
++}
++
++void VulkanPipelineCache::ShutdownDriverCache() {
++  SaveDriverCache();
++  std::unique_lock<std::shared_mutex> lock(driver_cache_mutex_);
++  if (driver_cache_ == VK_NULL_HANDLE) {
++    driver_cache_path_.clear();
++    return;
++  }
++  destroy_driver_cache_(command_processor_.GetVulkanDevice()->device(), driver_cache_, nullptr);
++  driver_cache_ = VK_NULL_HANDLE;
++  driver_cache_path_.clear();
++  driver_cache_generation_.store(0, std::memory_order_relaxed);
++  driver_cache_saved_generation_ = 0;
++}
++
+ void VulkanPipelineCache::InitializeShaderStorage(const std::filesystem::path& cache_root,
+                                                   uint32_t title_id, bool blocking) {
+   ShutdownShaderStorage();
++  InitializeDriverCache(cache_root, title_id);
+   {
+     std::lock_guard<std::mutex> lock(creation_request_lock_);
+     startup_loading_ = false;
+@@ -704,6 +871,9 @@ void VulkanPipelineCache::InitializeShaderStorage(const std::filesystem::path& c
+ 
+   shader_storage_cache_root_ = cache_root;
+   shader_storage_title_id_ = title_id;
++  // Persist prewarmed pipelines before entering gameplay. Some host exit paths
++  // bypass SDK destruction, so persistence must not depend on shutdown alone.
++  SaveDriverCache();
+ 
+   // Start the storage writing thread.
+   storage_write_flush_shaders_ = false;
+@@ -715,6 +885,7 @@ void VulkanPipelineCache::InitializeShaderStorage(const std::filesystem::path& c
+ }
+ 
+ void VulkanPipelineCache::ShutdownShaderStorage() {
++  ShutdownDriverCache();
+   if (storage_write_thread_) {
+     {
+       std::lock_guard<std::mutex> lock(storage_write_request_lock_);
+@@ -3480,8 +3651,15 @@ bool VulkanPipelineCache::EnsurePipelineCreated(const PipelineCreationArguments&
+   const ui::vulkan::VulkanDevice::Functions& dfn = vulkan_device->functions();
+   const VkDevice device = vulkan_device->device();
+   VkPipeline pipeline;
+-  VkResult create_result = dfn.vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1,
+-                                                         &pipeline_create_info, nullptr, &pipeline);
++  VkResult create_result;
++  {
++    std::shared_lock<std::shared_mutex> cache_lock(driver_cache_mutex_);
++    create_result = dfn.vkCreateGraphicsPipelines(device, driver_cache_, 1,
++                                                 &pipeline_create_info, nullptr, &pipeline);
++    if (create_result == VK_SUCCESS && driver_cache_ != VK_NULL_HANDLE) {
++      driver_cache_generation_.fetch_add(1, std::memory_order_relaxed);
++    }
++  }
+   if (create_result != VK_SUCCESS) {
+     uint64_t ps_hash = creation_arguments.pixel_shader
+                            ? creation_arguments.pixel_shader->shader().ucode_data_hash()
+@@ -3632,8 +3810,13 @@ void VulkanPipelineCache::StorageWriteThread() {
+ 
+   bool flush_shaders = false;
+   bool flush_pipelines = false;
++  auto next_driver_save = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+ 
+   while (true) {
++    if (std::chrono::steady_clock::now() >= next_driver_save) {
++      SaveDriverCache();
++      next_driver_save = std::chrono::steady_clock::now() + std::chrono::seconds(10);
++    }
+     if (flush_shaders) {
+       flush_shaders = false;
+       assert_not_null(shader_storage_file_);
+@@ -3670,7 +3853,7 @@ void VulkanPipelineCache::StorageWriteThread() {
+         flush_pipelines = true;
+       }
+       if (!shader && !write_pipeline) {
+-        storage_write_request_cond_.wait(lock);
++        storage_write_request_cond_.wait_until(lock, next_driver_save);
+         continue;
+       }
+     }

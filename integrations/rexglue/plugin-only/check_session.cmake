@@ -1,0 +1,13 @@
+# Read-only guard shared by configure and each build invocation.
+if(NOT DEFINED ASTER_HUMAN_STATUS)
+    message(FATAL_ERROR "ASTER_HUMAN_STATUS must identify session 027 status.json")
+endif()
+if(EXISTS "${ASTER_HUMAN_STATUS}")
+    file(READ "${ASTER_HUMAN_STATUS}" _human_json)
+    string(JSON _human_state ERROR_VARIABLE _human_error GET "${_human_json}" state)
+    if(_human_error)
+        message(FATAL_ERROR "Cannot determine session 027 state; finalize its report before building")
+    elseif(_human_state STREQUAL "running")
+        message(FATAL_ERROR "Human session 027 is marked running. Close the game and finalize its report before configuring/building.")
+    endif()
+endif()
