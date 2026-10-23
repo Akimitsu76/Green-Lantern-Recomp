@@ -9,8 +9,8 @@ HUD, cenário/personagens visíveis, combate inicial e passagem dos primeiros
 destroços até o tutorial de defesa. Há sinal de áudio medido no stream do jogo. O modo
 Vulkan FSI corrigiu a geometria preta nas cenas testadas; o padrão FBO falhou. A revisão
 das mudanças do OpenCode corrigiu o analisador e isolou 21 limites de função
-não comprovados. Veja [a revisão](docs/OPENCODE_REVIEW.md) e o
-[estado de jogabilidade](docs/PLAYABILITY.md).
+não comprovados. Veja [a revisão](OPENCODE_REVIEW.md) e o
+[estado de jogabilidade](PLAYABILITY.md).
 
 ## Launcher portátil e geração local — 23/10/2026
 
@@ -18,7 +18,7 @@ O launcher agora gera e compila o host a partir da pasta extraída do jogo,
 verifica a revisão do XEX e reutiliza builds íntegros. Os pacotes Windows ZIP
 (com `.exe`) e Linux TAR.GZ ficam em `dist/`. Incluem Python/Tk e CMake/Ninja;
 a toolchain C++23 continua necessária. Não incluem jogo nem código recompilado.
-Veja [instalação e requisitos](docs/PORTABLE_BUILD.md).
+Veja [instalação e requisitos](PORTABLE_BUILD.md).
 
 Corrigidos: VSync off acelerando o relógio guest nos alvos 30/60, falso controle
 de MSAA, botão Cancelar invertido e validação ignorando destinos não registrados.
@@ -36,8 +36,8 @@ Outros trechos/GPUs, a avaliação humana subjetiva dos presets e a ocorrência
 isolada de sombra continuam pendentes. A sessão humana 058 confirmou gameplay
 real em 60 fps, combate, pausa, cutscene e carregamento; falta registrar a
 percepção de física, animações, áudio e engasgos. Veja
-[GPU_OPTIMIZATION.md](docs/GPU_OPTIMIZATION.md) e
-[GRAPHICS_POLISH.md](docs/GRAPHICS_POLISH.md).
+[GPU_OPTIMIZATION.md](GPU_OPTIMIZATION.md) e
+[GRAPHICS_POLISH.md](GRAPHICS_POLISH.md).
 
 O launcher foi redesenhado com as abas **Jogar**, **Gráficos**, **Jogo e
 arquivos** e **Diagnóstico**. A aba **Gráficos** oferece os presets **Baixa**,
@@ -47,7 +47,7 @@ um perfil isolado; o modo ilimitado usa o build v10, desliga VSync e usa
 apresentação imediata. Esses dois alvos são opt-in, pedem confirmação e não
 alteram o save de 30 fps. As preferências do launcher ficam apenas em
 `.aster/config/settings.json` (schema 2); nenhum preset grava no perfil do jogo.
-Veja o [guia de presets](docs/GRAPHICS_PRESETS.md).
+Veja o [guia de presets](GRAPHICS_PRESETS.md).
 
 O alvo 60 opt-in foi medido em par com o alvo 30: o passo de simulação acompanha
 o tempo de parede nos dois e o delta de ~2% é comum aos dois alvos. O alvo 60
@@ -60,7 +60,7 @@ O modo ilimitado v10 foi exercitado por 90,16 s em FSI, com 38.627
 apresentações (média de 428/s), alvo de simulação 60 em tempo real, entradas de
 teclado enviadas e sem erro fatal. O probe ainda registra
 `gameplay_verified=false`; não há captura visual de gameplay no Xwayland nesta
-máquina. Veja [FPS_PROGRESS.md](docs/FPS_PROGRESS.md).
+máquina. Veja [FPS_PROGRESS.md](FPS_PROGRESS.md).
 
 **A suíte atual tem 152 testes aprovados, sem falhas ou skips**, executada com
 Xvfb em 1440×900.
@@ -159,23 +159,23 @@ e BUILD_PIPELINE para reproduzir o experimento.
 
 ## Documentação
 
-- [Progresso nativo e evidências atuais](docs/NATIVE_PROGRESS.md)
-- [Estudo dos ports indicados pelo usuário](docs/PORT_REFERENCES.md)
-- [Licenças das ferramentas](docs/TOOLING_LICENSES.md)
-- [Ambiente inicial](docs/ENVIRONMENT.md)
-- [Viabilidade e fontes técnicas](docs/FEASIBILITY.md)
-- [XEX real e avaliação do XenonRecomp](docs/XENONRECOMP_EVALUATION.md)
-- [Arquitetura](docs/ARCHITECTURE.md)
-- [Engenharia reversa](docs/REVERSE_ENGINEERING.md)
-- [Pipeline](docs/BUILD_PIPELINE.md)
-- [Módulos](docs/GAME_MODULES.md)
-- [Desenvolvimento e testes](docs/DEVELOPMENT.md)
-- [Resultados da validação](docs/VALIDATION.md)
-- [Presets gráficos e alvo de FPS](docs/GRAPHICS_PRESETS.md)
-- [Abrir a compilação experimental](docs/EXPERIMENTAL_PLAY.md)
-- [Limitações](docs/KNOWN_LIMITATIONS.md)
+- [Progresso nativo e evidências atuais](NATIVE_PROGRESS.md)
+- [Estudo dos ports indicados pelo usuário](PORT_REFERENCES.md)
+- [Licenças das ferramentas](TOOLING_LICENSES.md)
+- [Ambiente inicial](ENVIRONMENT.md)
+- [Viabilidade e fontes técnicas](FEASIBILITY.md)
+- [XEX real e avaliação do XenonRecomp](XENONRECOMP_EVALUATION.md)
+- [Arquitetura](ARCHITECTURE.md)
+- [Engenharia reversa](REVERSE_ENGINEERING.md)
+- [Pipeline](BUILD_PIPELINE.md)
+- [Módulos](GAME_MODULES.md)
+- [Desenvolvimento e testes](DEVELOPMENT.md)
+- [Resultados da validação](VALIDATION.md)
+- [Presets gráficos e alvo de FPS](GRAPHICS_PRESETS.md)
+- [Abrir a compilação experimental](EXPERIMENTAL_PLAY.md)
+- [Limitações](KNOWN_LIMITATIONS.md)
 
 Não adicione dumps, assets, código gerado proprietário ou chaves ao repositório.
 Ferramentas de terceiros ficam isoladas em `.aster/tools`, com suas licenças.
 
-Investigação atual de cadência e experimentos isolados: [FPS_PROGRESS.md](docs/FPS_PROGRESS.md).
+Investigação atual de cadência e experimentos isolados: [FPS_PROGRESS.md](FPS_PROGRESS.md).
