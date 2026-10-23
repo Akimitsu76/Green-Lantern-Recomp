@@ -1,0 +1,144 @@
+diff --git a/src/graphics/vulkan/pipeline_cache.cpp b/src/graphics/vulkan/pipeline_cache.cpp
+--- a/src/graphics/vulkan/pipeline_cache.cpp
++++ b/src/graphics/vulkan/pipeline_cache.cpp
+@@ -1272,7 +1272,8 @@
+     VkPipeline last_pipeline = last_pipeline_->second.pipeline.load(std::memory_order_acquire);
+     const PipelineLayoutProvider* last_pipeline_layout =
+         last_pipeline_->second.pipeline_layout.load(std::memory_order_acquire);
+-    if (last_pipeline != VK_NULL_HANDLE && last_pipeline_layout != nullptr) {
++    if ((last_pipeline != VK_NULL_HANDLE && last_pipeline_layout != nullptr) ||
++        last_pipeline_->second.is_placeholder.load(std::memory_order_acquire)) {
+       pipeline_out = last_pipeline;
+       pipeline_layout_out = last_pipeline_layout;
+       if (pipeline_handle_out) {
+@@ -1282,8 +1283,12 @@
+     }
+   }
+ 
++  // Pending pipelines have no temporary driver object. Draws are skipped by
++  // the command processor until the worker publishes a complete pipeline.
++  // Memory-export shaders have guest-visible side effects and must not skip.
+   bool use_async = REXCVAR_GET(async_shader_compilation) && !creation_threads_.empty() &&
+-                   pixel_shader && placeholder_pixel_shader_ != VK_NULL_HANDLE;
++                   !vertex_shader->shader().memexport_eM_written() &&
++                   (!pixel_shader || !pixel_shader->shader().memexport_eM_written());
+   uint8_t async_priority = pipeline_util::kPriorityLowest;
+   if (use_async) {
+     uint32_t bound_rts =
+@@ -1299,7 +1304,8 @@
+   auto it = pipelines_.find(description);
+   if (it != pipelines_.end()) {
+     VkPipeline found_pipeline = it->second.pipeline.load(std::memory_order_acquire);
+-    if (found_pipeline == VK_NULL_HANDLE) {
++    if (found_pipeline == VK_NULL_HANDLE &&
++        !it->second.is_placeholder.load(std::memory_order_acquire)) {
+       PipelineCreationArguments creation_arguments;
+       if (!TryGetPipelineCreationArgumentsForDescription(description, &*it, creation_arguments) ||
+           !EnsurePipelineCreated(creation_arguments)) {
+@@ -1307,15 +1313,14 @@
+       }
+       found_pipeline = it->second.pipeline.load(std::memory_order_acquire);
+     }
+-    const PipelineLayoutProvider* found_pipeline_layout =
+-        it->second.pipeline_layout.load(std::memory_order_acquire);
+     last_pipeline_ = &*it;
+-    pipeline_out = found_pipeline;
+-    pipeline_layout_out = found_pipeline_layout;
++    bool pending = false;
++    GetPipelineAndLayoutByHandle(&it->second, pipeline_out, pipeline_layout_out, &pending);
+     if (pipeline_handle_out) {
+       *pipeline_handle_out = &it->second;
+     }
+-    return pipeline_out != VK_NULL_HANDLE && pipeline_layout_out != nullptr;
++    return (pipeline_out != VK_NULL_HANDLE && pipeline_layout_out != nullptr) ||
++           pending;
+   }
+ 
+   // Create the pipeline if not already existing.
+@@ -1330,21 +1335,13 @@
+   bool queued_async_creation = false;
+   if (use_async) {
+     creation_arguments_real.priority = async_priority;
+-    PipelineCreationArguments creation_arguments_placeholder;
+-    if (TryGetPipelineCreationArgumentsForDescription(description, &pipeline,
+-                                                      creation_arguments_placeholder, true)) {
+-      pipeline.second.is_placeholder.store(true, std::memory_order_release);
+-      if (EnsurePipelineCreated(creation_arguments_placeholder, placeholder_pixel_shader_)) {
+-        {
+-          std::lock_guard<std::mutex> lock(creation_request_lock_);
+-          creation_queue_.push(creation_arguments_real);
+-        }
+-        creation_request_cond_.notify_one();
+-        queued_async_creation = true;
+-      } else {
+-        pipeline.second.is_placeholder.store(false, std::memory_order_release);
+-      }
+-    }
++    pipeline.second.is_placeholder.store(true, std::memory_order_release);
++    {
++      std::lock_guard<std::mutex> lock(creation_request_lock_);
++      creation_queue_.push(creation_arguments_real);
++    }
++    creation_request_cond_.notify_one();
++    queued_async_creation = true;
+   }
+ 
+   if (!queued_async_creation && !EnsurePipelineCreated(creation_arguments_real)) {
+@@ -1368,12 +1365,13 @@
+     storage_write_request_cond_.notify_all();
+   }
+   last_pipeline_ = &pipeline;
+-  pipeline_out = pipeline.second.pipeline.load(std::memory_order_acquire);
+-  pipeline_layout_out = pipeline.second.pipeline_layout.load(std::memory_order_acquire);
++  bool pending = false;
++  GetPipelineAndLayoutByHandle(&pipeline.second, pipeline_out, pipeline_layout_out, &pending);
+   if (pipeline_handle_out) {
+     *pipeline_handle_out = &pipeline.second;
+   }
+-  return pipeline_out != VK_NULL_HANDLE && pipeline_layout_out != nullptr;
++  return (pipeline_out != VK_NULL_HANDLE && pipeline_layout_out != nullptr) ||
++         pending;
+ }
+ 
+ bool VulkanPipelineCache::IsCreatingPipelines() const {
+@@ -1396,10 +1394,17 @@
+     return;
+   }
+   const auto* pipeline = reinterpret_cast<const Pipeline*>(handle);
++  bool pending = pipeline->is_placeholder.load(std::memory_order_acquire);
++  if (pending) {
++    pipeline_out = VK_NULL_HANDLE;
++    pipeline_layout_out = nullptr;
++    if (is_placeholder_out) *is_placeholder_out = true;
++    return;
++  }
+   pipeline_out = pipeline->pipeline.load(std::memory_order_acquire);
+   pipeline_layout_out = pipeline->pipeline_layout.load(std::memory_order_acquire);
+   if (is_placeholder_out) {
+-    *is_placeholder_out = pipeline->is_placeholder.load(std::memory_order_acquire);
++    *is_placeholder_out = false;
+   }
+ }
+ 
+@@ -3728,6 +3733,10 @@
+       } else {
+         creation_arguments.pipeline->second.pipeline.store(VK_NULL_HANDLE,
+                                                            std::memory_order_release);
++        // Permit the existing synchronous error path to retry after failure;
++        // never leave a permanently pending, invisible draw.
++        creation_arguments.pipeline->second.is_placeholder.store(false,
++                                                                 std::memory_order_release);
+       }
+     }
+ 
+@@ -3761,6 +3770,10 @@
+       } else {
+         creation_arguments.pipeline->second.pipeline.store(VK_NULL_HANDLE,
+                                                            std::memory_order_release);
++        // Permit the existing synchronous error path to retry after failure;
++        // never leave a permanently pending, invisible draw.
++        creation_arguments.pipeline->second.is_placeholder.store(false,
++                                                                 std::memory_order_release);
+       }
+     }
+   }

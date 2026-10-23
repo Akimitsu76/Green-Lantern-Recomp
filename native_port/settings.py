@@ -1,6 +1,7 @@
 """Versioned, project-local preferences. Only explicit typed fields are accepted."""
 from pathlib import Path
 import json
+import sys
 from . import graphics
 from .errors import PortError
 from .workspace import Workspace
@@ -38,7 +39,17 @@ def validate(data, project):
         raise PortError('SETTINGS_VALUE', 'Tipo de build inválido.')
     if type(result['jobs']) is not int or not 1 <= result['jobs'] <= 64:
         raise PortError('SETTINGS_VALUE', 'Número de tarefas deve ficar entre 1 e 64.')
-    result['graphics'] = graphics.validate(result['graphics'])
+    previous_graphics = result['graphics']
+    if (sys.platform == 'linux' and isinstance(previous_graphics, dict)
+            and 'upscaler' not in previous_graphics and previous_graphics.get('preset') == 'custom'):
+        # Preserve the intent of legacy High/Ultra custom configurations, while
+        # keeping any explicitly chosen filter unchanged on later updates.
+        previous_graphics = dict(previous_graphics)
+        quality = previous_graphics.get('texture_quality')
+        previous_graphics['upscaler'] = {'high': 'cubic', 'ultra': 'sharp'}.get(quality, 'bilinear')
+    if sys.platform != 'linux' and isinstance(previous_graphics, dict):
+        previous_graphics = dict(previous_graphics, upscaler='bilinear')
+    result['graphics'] = graphics.validate(previous_graphics)
     result['graphics']['render_scale'] = 1  # Supersampling is visually broken for this title.
     return result
 

@@ -99,9 +99,25 @@ a saída; a renderização interna permanece em 1x (720p). Os testes reproduzira
 o launcher e o comando de jogo usam 1x, inclusive ao carregar preferências antigas.
 Isso contorna o defeito; a renderização interna em 2x/3x ainda precisa de correção.
 
+No backend Linux atualizado, Alta usa reconstrução bicúbica e Ultra acrescenta
+nitidez limitada ao contraste local. Baixa/Padrão usam bilinear. Esse filtro
+espacial é aplicado na saída, sem escalar os buffers internos que causaram áreas
+pretas; ele não substitui as texturas originais por assets HD. O SDK Windows
+atual ainda não recebe esse módulo Linux.
+
+Após atualizar o AppImage, use **Atualizar port** para gerar o backend novo.
+Saves e o cache do usuário são preservados; o build anterior permanece em outra
+pasta. A biblioteca de apresentação é compilada localmente contra o SDK Linux
+0.10.0 fixado e carregada somente no processo do jogo.
+
 Shaders e pipelines já conhecidos são preparados na inicialização. Novos shaders
 compilam em segundo plano no modo `async`; o primeiro encontro ainda pode causar
-engasgos. O cache persistente é comum a todos os alvos de FPS.
+engasgos. O backend Linux evita compilar um pipeline provisório na thread de
+desenho; os pipelines definitivos são preparados por workers. Shaders com
+efeitos sobre a memória guest preservam o caminho síncrono. Quadros incompletos
+continuam retidos para evitar objetos e sombras desaparecendo. Por isso a
+primeira visita a uma cena ainda pode ter pausas; não há garantia de zero
+travadas. O cache persistente é comum a todos os alvos de FPS.
 
 ## Pelo terminal
 

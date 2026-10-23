@@ -131,3 +131,17 @@ class FolderTests(unittest.TestCase):
         with self.assertRaises(PortError) as e:
             settings.load(self.project)
         self.assertEqual(e.exception.code, 'SETTINGS_READ')
+
+
+class SpatialSettingsMigrationTests(unittest.TestCase):
+    def test_legacy_ultra_custom_gains_filter_but_explicit_choice_survives(self):
+        from native_port import settings,graphics
+        with tempfile.TemporaryDirectory() as folder:
+            data=settings.defaults(folder)
+            data['graphics']=graphics.from_options('custom',texture_quality='ultra')
+            data['graphics'].pop('upscaler')
+            with patch('native_port.settings.sys.platform','linux'):
+                migrated=settings.validate(data,folder)
+                self.assertEqual(migrated['graphics']['upscaler'],'sharp')
+                data['graphics']['upscaler']='bilinear'
+                self.assertEqual(settings.validate(data,folder)['graphics']['upscaler'],'bilinear')

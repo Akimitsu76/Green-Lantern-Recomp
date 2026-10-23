@@ -64,6 +64,7 @@ def parse_arguments(argv=None):
                         help='Atalho antigo para --fps-target 60.')
     parser.add_argument('--graphics-preset', choices=graphics.PRESETS, default='default',
                         help='Preset gráfico. Padrão: default (mesmos valores do build principal).')
+    parser.add_argument('--upscaler', choices=graphics.UPSCALERS, help='Filtro espacial de saída (Linux com backend atualizado).')
     parser.add_argument('--output-resolution', choices=graphics.OUTPUT_RESOLUTIONS, default='auto',
                         help='Tamanho da janela, incluindo 1920x1080; independente da escala interna.')
     parser.add_argument('--render-scale', type=int, choices=(1, 2, 3),
@@ -112,6 +113,7 @@ def resolve_graphics(parser, args, target):
             vsync=vsync_on,
             shader_mode=args.shader_mode,
             output_resolution=args.output_resolution,
+            upscaler=args.upscaler,
         )
         if data['render_scale'] > 1:
             print('Compatibilidade: escala interna 2x/3x causa áreas pretas neste jogo; usando 1x. A resolução da janela continua independente.', file=sys.stderr)
@@ -228,6 +230,19 @@ def build_command(root, binary, game, run, log, args, target, graphics_data, pre
     return command
 
 
+def presentation_environment(binary, data, env, parser):
+    env = dict(env)
+    library = binary.parent / 'libaster_presenter_compat.so'
+    if os.name != 'nt' and library.is_file():
+        # Applied only to the game, never SDK tools or the Python launcher.
+        env['LD_PRELOAD'] = str(library.resolve())
+        env['ASTER_PRESENT_FILTER'] = data['upscaler']
+        print(f"Filtro de saída: {data['upscaler']} (interno 720p; reconstrução espacial)", flush=True)
+    elif data['upscaler'] != 'bilinear':
+        parser.error('Este filtro exige o backend Linux atualizado. Use Gerar port para atualizar; no Windows use bilinear.')
+    return env
+
+
 def main():
     parser, args = parse_arguments()
     target = resolve_target(parser, args)
@@ -295,6 +310,7 @@ def main():
     print('Enter: Start | Espaço: A | Backspace: B | WASD: stick esquerdo | L: X', flush=True)
     print('Setas: stick direito | P: Y | Q/E: LT/RT | 1/3: LB/RB | F/K: LS/RS | Tab: Back | Shift+setas: direcional', flush=True)
     print(f'Jogo: {game}\nSaves: {run / "user"}\nLog desta sessão: {log}', flush=True)
+    env = presentation_environment(binary, graphics_data, external_env(), parser)
     if args.dry_run:
         print('Validação concluída. Comando de execução:\n' + shlex.join(command))
         return 0
@@ -315,8 +331,8 @@ def main():
             resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
         os.chdir(run)
         if os.name == 'nt':
-            return subprocess.call(command, env=external_env())
-        os.execve(command[0], command, external_env())
+            return subprocess.call(command, env=env)
+        os.execve(command[0], command, env)
     except OSError as exc:
         parser.error(f'Não foi possível abrir o jogo: {exc}')
     finally:

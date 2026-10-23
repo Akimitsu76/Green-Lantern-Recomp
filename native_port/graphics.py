@@ -6,6 +6,8 @@ dump; the launcher stores its own preferences separately.
 """
 from __future__ import annotations
 
+import sys
+
 from .errors import PortError
 
 PRESETS = ('low', 'default', 'high', 'ultra', 'custom')
@@ -19,8 +21,8 @@ PRESET_LABELS = {
 PRESET_DESCRIPTIONS = {
     'low': 'Máximo desempenho: 720p interno, MSAA do jogo e cache de texturas reduzido.',
     'default': 'Equilíbrio original: 720p interno, MSAA do jogo e 4x anisotrópico.',
-    'high': 'Filtragem 8x e cache maior; resolução interna nativa para compatibilidade.',
-    'ultra': 'Filtragem 16x e cache máximo; resolução interna nativa para compatibilidade.',
+    'high': 'Ampliação bicúbica, filtragem 8x e cache maior; interno nativo.',
+    'ultra': 'Ampliação bicúbica com nitidez, filtragem 16x e cache máximo; interno nativo.',
     'custom': 'Escolha resolução interna, MSAA, filtragem e memória de texturas.',
 }
 TARGETS = ('30', '60', 'unlimited')
@@ -32,6 +34,8 @@ TARGET_DESCRIPTIONS = {
                   'apresentação imediata; a simulação mantém alvo 60.'),
 }
 SHADER_MODES = ('async', 'blocking')
+UPSCALERS = ('bilinear', 'cubic', 'sharp')
+UPSCALER_LABELS = {'bilinear': 'Bilinear', 'cubic': 'Bicúbico', 'sharp': 'Bicúbico + nitidez'}
 OUTPUT_RESOLUTIONS = ('auto', '1280x720', '1920x1080', '2560x1440', '3840x2160')
 TEXTURE_QUALITIES = ('low', 'default', 'high', 'ultra')
 TEXTURE_QUALITY_LABELS = {
@@ -78,10 +82,17 @@ def defaults():
     }
 
 
+for _name, _filter in [('low', 'bilinear'), ('default', 'bilinear'), ('high', 'cubic'), ('ultra', 'sharp'), ('custom', 'bilinear')]:
+    _PRESET_VALUES[_name]['upscaler'] = _filter
+
+
 def preset_values(name):
     if name not in PRESETS:
         raise PortError('GRAPHICS_VALUE', f'Preset gráfico inválido: {name}.')
-    return dict(_PRESET_VALUES[name])
+    values = dict(_PRESET_VALUES[name])
+    if sys.platform != 'linux':
+        values['upscaler'] = 'bilinear'
+    return values
 
 
 def apply_preset(name, current=None):
@@ -91,13 +102,13 @@ def apply_preset(name, current=None):
     values.update({key: value for key, value in current.items() if key in values})
     values['preset'] = name
     if name != 'custom':
-        values.update(_PRESET_VALUES[name])
+        values.update(preset_values(name))
     return validate(values)
 
 
 def from_options(preset='default', *, render_scale=None, msaa_2x=None,
                  anisotropic=None, texture_quality=None, present_dither=None,
-                 fps_target='30', vsync=True, shader_mode='async', output_resolution='auto'):
+                 fps_target='30', vsync=True, shader_mode='async', output_resolution='auto', upscaler=None):
     """Build a graphics block from CLI/UI values.
 
     Any explicit rendering override switches the block to ``custom`` so a
@@ -106,7 +117,7 @@ def from_options(preset='default', *, render_scale=None, msaa_2x=None,
     if preset not in PRESETS:
         raise PortError('GRAPHICS_VALUE', f'Preset gráfico inválido: {preset}.')
     values = defaults()
-    values.update(_PRESET_VALUES[preset])
+    values.update(preset_values(preset))
     values['preset'] = preset
     overrides = {
         'render_scale': render_scale,
@@ -123,6 +134,10 @@ def from_options(preset='default', *, render_scale=None, msaa_2x=None,
     if applied and preset != 'custom':
         values['preset'] = 'custom'
     values.update(fps_target=fps_target, vsync=vsync, shader_mode=shader_mode, output_resolution=output_resolution)
+    if upscaler is not None:
+        if values['upscaler'] != upscaler:
+            values['preset'] = 'custom'
+        values['upscaler'] = upscaler
     return validate(values)
 
 
@@ -136,13 +151,15 @@ def validate(data):
     if result['preset'] not in PRESETS:
         raise PortError('GRAPHICS_VALUE', 'Preset gráfico inválido.')
     if result['preset'] != 'custom':
-        result.update(_PRESET_VALUES[result['preset']])
+        result.update(preset_values(result['preset']))
     if result['fps_target'] not in TARGETS:
         raise PortError('GRAPHICS_VALUE', 'Alvo de FPS deve ser 30, 60 ou ilimitado.')
     if not isinstance(result['vsync'], bool):
         raise PortError('GRAPHICS_VALUE', 'VSync inválido.')
     if result['shader_mode'] not in SHADER_MODES:
         raise PortError('GRAPHICS_VALUE', 'Modo de shaders inválido.')
+    if result['upscaler'] not in UPSCALERS:
+        raise PortError('GRAPHICS_VALUE', 'Filtro de ampliação inválido.')
     if result['output_resolution'] not in OUTPUT_RESOLUTIONS:
         raise PortError('GRAPHICS_VALUE', 'Resolução de saída inválida.')
     render_scale = result['render_scale']
@@ -200,7 +217,7 @@ def cvar_arguments(data):
 def summary(data):
     data = validate(data)
     return (f"{PRESET_LABELS[data['preset']]} · {internal_resolution(data['render_scale'])} · "
-            f"MSAA do jogo · "
+            f"{UPSCALER_LABELS[data['upscaler']]} · MSAA do jogo · "
             f"Aniso {ANISOTROPIC_LABELS[data['anisotropic']]} · "
             f"Cache de texturas {TEXTURE_QUALITY_LABELS[data['texture_quality']]} · "
             f"{TARGET_LABELS[data['fps_target']]}")

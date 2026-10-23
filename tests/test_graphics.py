@@ -81,3 +81,34 @@ class GraphicsPresetTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class SpatialFilterTests(unittest.TestCase):
+    def test_presets_change_filter_without_scaling_guest_buffers(self):
+        for preset, expected in [('low','bilinear'),('default','bilinear'),('high','cubic'),('ultra','sharp')]:
+            data=graphics.from_options(preset, output_resolution='1920x1080')
+            self.assertEqual(data['upscaler'], expected)
+            self.assertEqual(data['render_scale'], 1)
+            self.assertIn('--window_width=1920', graphics.cvar_arguments(data))
+    def test_explicit_filter_is_preserved_and_validated(self):
+        data=graphics.from_options('ultra',upscaler='cubic')
+        self.assertEqual(data['preset'],'custom')
+        self.assertEqual(data['upscaler'],'cubic')
+        with self.assertRaises(PortError): graphics.from_options('custom',upscaler='fake')
+
+
+class WindowsPresetTests(unittest.TestCase):
+    def test_windows_presets_use_available_filter(self):
+        from unittest.mock import patch
+        with patch.object(graphics.sys, 'platform', 'win32'):
+            for name in ('high', 'ultra'):
+                data = graphics.from_options(name, output_resolution='1920x1080')
+                self.assertEqual(data['upscaler'], 'bilinear')
+                self.assertEqual(graphics.apply_preset(name)['upscaler'], 'bilinear')
+                self.assertEqual(graphics.validate({'preset': name})['upscaler'], 'bilinear')
+                self.assertGreaterEqual(data['anisotropic'], 4)
+
+    def test_explicit_unsupported_filter_remains_visible_to_runtime_validation(self):
+        from unittest.mock import patch
+        with patch.object(graphics.sys, 'platform', 'win32'):
+            self.assertEqual(graphics.from_options('high', upscaler='sharp')['upscaler'], 'sharp')

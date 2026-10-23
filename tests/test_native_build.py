@@ -55,7 +55,9 @@ class NativeBuildTests(unittest.TestCase):
             for relative in ['games/green_lantern_rex_hints.toml',
                              'integrations/rexglue/portable_timing.cpp',
                              'integrations/rexglue/plugin-only/CMakeLists.txt',
-                             'integrations/rexglue/patches/0001-vulkan-driver-pipeline-cache.patch']:
+                             'integrations/rexglue/patches/0001-vulkan-driver-pipeline-cache.patch',
+                             'integrations/rexglue/patches/0003-vulkan-deferred-pipelines.patch',
+                             'integrations/rexglue/presenter-filter/CMakeLists.txt']:
                 p = root / relative
                 p.parent.mkdir(parents=True, exist_ok=True)
                 p.write_text('public fixture')
@@ -92,7 +94,8 @@ class NativeBuildTests(unittest.TestCase):
                     patch('native_port.native_build.ensure_sdk', return_value=prefix), \
                     patch('native_port.native_build.toolchain', return_value=('cmake', 'ninja', 'clang++', {})), \
                     patch('native_port.native_build.run_process', side_effect=process) as command, \
-                    patch('native_port.native_cache.build_cache_plugin', return_value=cache):
+                    patch('native_port.native_cache.build_cache_plugin', return_value=cache), \
+                    patch('native_port.native_cache.build_presenter_filter', return_value=cache):
                 first = build_native(game, work)
                 count = command.call_count
                 second = build_native(game, work)
@@ -107,6 +110,14 @@ class NativeBuildTests(unittest.TestCase):
                 self.assertFalse(first['gameplay_verified'])
                 verify_install(root, first)
                 self.assertEqual(read_install(root), first)
+                previous_codegen = sum('codegen' in call.args[0] for call in command.call_args_list)
+                previous_host = (root / first['binary']).read_bytes()
+                (root / 'integrations/rexglue/patches/0003-vulkan-deferred-pipelines.patch').write_text('updated renderer only')
+                first = build_native(game, work)
+                self.assertEqual(sum('codegen' in call.args[0] for call in command.call_args_list), previous_codegen,
+                                 'renderer-only updates must reuse the verified CPU host')
+                self.assertEqual((root / first['binary']).read_bytes(), previous_host)
+                verify_install(root, first)
                 (root / first['binary']).write_bytes(b'changed')
                 with self.assertRaises(PortError):
                     verify_install(root, first)

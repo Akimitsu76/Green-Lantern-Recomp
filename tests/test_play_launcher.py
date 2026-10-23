@@ -243,6 +243,7 @@ class PlayLauncherTests(unittest.TestCase):
             binary = root / launcher.MAIN_BINARY
             binary.parent.mkdir(parents=True)
             binary.write_bytes(b'synthetic executable')
+            (binary.parent / 'libaster_presenter_compat.so').write_bytes(b'synthetic presenter')
             report = root / launcher.MAIN_REPORT
             report.parent.mkdir(parents=True)
             identity = launcher.digest(game / 'default.xex')
@@ -381,3 +382,20 @@ class PlayLauncherTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class PresentationEnvironmentTests(unittest.TestCase):
+    def test_filter_is_applied_only_to_game_environment(self):
+        import argparse
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder); library=root/'libaster_presenter_compat.so'; library.write_bytes(b'fixture')
+            original={'PATH':'/test'}
+            env=launcher.presentation_environment(root/'aster_green_lantern',{'upscaler':'sharp'},original,argparse.ArgumentParser())
+            self.assertEqual(original,{'PATH':'/test'})
+            self.assertEqual(env['LD_PRELOAD'],str(library))
+            self.assertEqual(env['ASTER_PRESENT_FILTER'],'sharp')
+    def test_unavailable_filter_never_silently_claims_success(self):
+        import argparse
+        with tempfile.TemporaryDirectory() as folder:
+            with self.assertRaises(SystemExit):
+                launcher.presentation_environment(Path(folder)/'game',{'upscaler':'sharp'},{},argparse.ArgumentParser())

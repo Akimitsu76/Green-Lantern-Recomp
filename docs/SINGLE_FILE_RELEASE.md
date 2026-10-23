@@ -1,3 +1,11 @@
+# Atualização v0.1.2
+
+Pacotes atuais preparados: `AsterNative-linux-x86_64.AppImage`, `AsterNative-windows-x64.exe` e `SHA256SUMS`. Conferir os hashes do arquivo que acompanha esta release; os hashes abaixo são históricos.
+
+Linux contém backend Vulkan atualizado e filtros bicúbico/nitidez. Windows recebe interface, progresso, saves compartilhados e saída Full HD; usa bilinear. A execução do jogo em Windows real não foi validada.
+
+## Histórico de empacotamento
+
 # Arquivos únicos para Releases
 
 Os downloads principais agora são:

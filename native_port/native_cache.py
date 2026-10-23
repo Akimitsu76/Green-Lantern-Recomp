@@ -68,8 +68,9 @@ def apply_patch_exact(root, patch_text):
 
 def build_cache_plugin(root, work, prefix, tools, cancel, emit, run, allow_download):
     from .native_build import file_hash, safe_extract
-    patch = root / 'integrations/rexglue/patches/0001-vulkan-driver-pipeline-cache.patch'
-    recipe = hashlib.sha256((file_hash(patch) + file_hash(root / 'integrations/rexglue/plugin-only/CMakeLists.txt')).encode()).hexdigest()[:20]
+    patches = [root / ('integrations/rexglue/patches/' + name) for name in (
+        '0001-vulkan-driver-pipeline-cache.patch', '0003-vulkan-deferred-pipelines.patch')]
+    recipe = hashlib.sha256((''.join(file_hash(patch) for patch in patches) + file_hash(root / 'integrations/rexglue/plugin-only/CMakeLists.txt')).encode()).hexdigest()[:20]
     cache_root = work.path('tools/cache-plugin/' + recipe)
     product = cache_root / 'build/isolated-runtime/librexgpu-xenosrd.so'
     identity = cache_root / 'product.json'
@@ -108,7 +109,9 @@ def build_cache_plugin(root, work, prefix, tools, cancel, emit, run, allow_downl
     source, glslang = extracted
     marker = cache_root / 'patched.json'
     if not marker.is_file():
-        changed = apply_patch_exact(source, patch.read_text())
+        changed = []
+        for patch in patches:
+            changed.extend(apply_patch_exact(source, patch.read_text()))
         marker.write_text(json.dumps({str(p.relative_to(source)): file_hash(p) for p in changed}))
     for relative, expected in json.loads(marker.read_text()).items():
         if file_hash(source / relative) != expected:
@@ -123,5 +126,28 @@ def build_cache_plugin(root, work, prefix, tools, cancel, emit, run, allow_downl
     run('Compilar cache persistente', [cmake, '--build', cache_root / 'build', '--parallel', '2'])
     if not product.is_file():
         raise PortError('CACHE_BUILD', 'Plugin de cache não foi gerado.')
+    identity.write_text(json.dumps({'sha256': file_hash(product)}))
+    return product
+
+
+def build_presenter_filter(root, work, prefix, tools, cancel, run):
+    """Build only original host presentation code against the exact Linux SDK."""
+    from .native_build import file_hash
+    source = root / 'integrations/rexglue/presenter-filter'
+    recipe = hashlib.sha256(''.join(file_hash(p) for p in sorted(source.iterdir()) if p.is_file()).encode()).hexdigest()[:20]
+    build = work.path('tools/presenter-filter/' + recipe + '/build')
+    product = build / 'libaster_presenter_compat.so'
+    identity = build.parent / 'product.json'
+    if product.is_file() and identity.is_file():
+        if json.loads(identity.read_text()).get('sha256') == file_hash(product):
+            return product
+    cmake, ninja, compiler, _ = tools
+    cancel.check()
+    run('Configurar cache persistente e filtro de saída', [cmake, '-S', source, '-B', build, '-G', 'Ninja',
+        '-DCMAKE_BUILD_TYPE=RelWithDebInfo', f'-DCMAKE_PREFIX_PATH={prefix}',
+        f'-DCMAKE_CXX_COMPILER={compiler}', f'-DCMAKE_MAKE_PROGRAM={ninja}'])
+    run('Compilar cache persistente e filtro de saída', [cmake, '--build', build, '--parallel', '2'])
+    if not product.is_file():
+        raise PortError('CACHE_BUILD', 'O filtro de apresentação não foi gerado.')
     identity.write_text(json.dumps({'sha256': file_hash(product)}))
     return product

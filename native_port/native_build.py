@@ -24,6 +24,7 @@ from .workspace import Workspace
 
 XEX_SHA256 = '3218a70a78f2d258cd236c204ddbca0cee21c197d6de463f68f6e504385852d1'
 SDK_VERSION = '0.10.0'
+INTEGRATION_VERSION = 5
 SDK_ASSETS = {
     'linux-amd64': '0388edb3f8fb1444f1b0ad5d440cb02d9690ac20a76b04fd6b7dcc19f59328a6',
     'win-amd64': 'ad4485da853fbe932e9f5dbb643f9b5fe85dc73775ebbad4df6879fe6df0c11b',
@@ -196,9 +197,11 @@ def _build_native(source, workspace, cancel=None, emit=None, jobs=2, allow_downl
     hints = root / 'games/green_lantern_rex_hints.toml'
     hook = root / 'integrations/rexglue/portable_timing.cpp'
     recipe = {'sdk': SDK_VERSION, 'platform': host_platform(), 'xex': XEX_SHA256,
-              'hints': file_hash(hints), 'hook': file_hash(hook), 'integration': 4,
+              'hints': file_hash(hints), 'hook': file_hash(hook), 'integration': INTEGRATION_VERSION,
               'cache_project': file_hash(root / 'integrations/rexglue/plugin-only/CMakeLists.txt') if os.name != 'nt' else None,
-              'driver_cache_patch': file_hash(root / 'integrations/rexglue/patches/0001-vulkan-driver-pipeline-cache.patch') if os.name != 'nt' else None}
+              'driver_cache_patch': file_hash(root / 'integrations/rexglue/patches/0001-vulkan-driver-pipeline-cache.patch') if os.name != 'nt' else None,
+              'deferred_pipeline_patch': file_hash(root / 'integrations/rexglue/patches/0003-vulkan-deferred-pipelines.patch') if os.name != 'nt' else None,
+              'presenter_filter': {p.name: file_hash(p) for p in sorted((root / 'integrations/rexglue/presenter-filter').iterdir()) if p.is_file()} if os.name != 'nt' else None}
     key = hashlib.sha256(json.dumps(recipe, sort_keys=True).encode()).hexdigest()[:20]
     try:
         current = read_install(root)
@@ -218,6 +221,18 @@ def _build_native(source, workspace, cancel=None, emit=None, jobs=2, allow_downl
             return current
         except PortError:
             pass
+    # Renderer-only updates reuse the verified CPU host when SDK, hints and
+    # timing hook are unchanged. A modified/missing host is never reused.
+    reusable_host = None
+    if current:
+        previous = current.get('recipe', {})
+        host_fields = ('sdk', 'platform', 'xex', 'hints', 'hook')
+        candidate = root / current['binary']
+        if (all(previous.get(key) == recipe[key] for key in host_fields)
+                and previous.get('integration') in (4, 5)
+                and candidate.is_file()
+                and current.get('files', {}).get(current['binary']) == file_hash(candidate)):
+            reusable_host = candidate
     emit({'stage': 'tools', 'state': 'running', 'message': 'Verificando ferramentas e SDK'})
     cmake, ninja, compiler, env = toolchain(root, workspace)
     prefix = ensure_sdk(workspace, cancel, emit, allow_download)
@@ -244,62 +259,72 @@ def _build_native(source, workspace, cancel=None, emit=None, jobs=2, allow_downl
         (logs / (re.sub(r'[^a-zA-Z0-9]+', '-', name) + '.log')).write_text(result['stdout'] + result['stderr'])
         emit({'task': name, 'state': 'completed'})
     cache_plugin = None
+    presenter_filter = None
     emit({'stage': 'cache', 'state': 'running', 'message': 'Preparando cache gráfico'})
     if os.name != 'nt':
-        from .native_cache import build_cache_plugin
+        from .native_cache import build_cache_plugin, build_presenter_filter
         cache_plugin = build_cache_plugin(root, workspace, prefix, (cmake, ninja, compiler, env),
                                           cancel, emit, run, allow_download)
+        presenter_filter = build_presenter_filter(root, workspace, prefix, (cmake, ninja, compiler, env), cancel, run)
     emit({'stage': 'cache', 'state': 'completed', 'message': 'Cache pronto' if cache_plugin else 'Etapa dispensada nesta plataforma'})
     emit({'stage': 'codegen', 'state': 'running', 'message': 'Gerando o código nativo'})
-    manifest = project / 'aster_green_lantern_manifest.toml'
-    if not manifest.is_file():
-        run('Criar projeto nativo', [generator, 'init', '--project-name', 'aster_green_lantern',
-                                    '--xex-path', xex, '--game-root', game, '--project-root', project])
-        shutil.copy2(hints, project / 'hints.toml')
-        # SDK init lowercases asset paths and emits an empty includes list.
-        # Preserve the actual case on Linux and write one unambiguous manifest.
-        def relative(path):
-            try:
-                return Path(os.path.relpath(path, project)).as_posix()
-            except ValueError:  # Different Windows drives.
-                return path.as_posix()
-        manifest.write_text('[project]\nname = "aster_green_lantern"\nsdk_version = "0.10.0"\n'
-                            + 'game_root = ' + json.dumps(relative(game), ensure_ascii=False) + '\n\n'
-                            + '[entrypoint]\nfile_path = ' + json.dumps(relative(xex), ensure_ascii=False)
-                            + '\nout_directory_path = "generated/default"\nincludes = ["hints.toml"]\n')
-        shutil.copy2(hook, project / 'aster_timing.cpp')
-        cmake_file = project / 'CMakeLists.txt'
-        content = cmake_file.read_text()
-        content = content.replace('rexglue_setup_target(aster_green_lantern)',
-                                  'rexglue_setup_target(aster_green_lantern GPU_PLUGINS xenos)')
-        content += '\ntarget_sources(aster_green_lantern PRIVATE aster_timing.cpp)\n'
-        cmake_file.write_text(content)
-    stamp = project / 'aster-codegen.json'
-    valid_codegen = False
-    if stamp.is_file():
-        try:
-            recorded = json.loads(stamp.read_text())
-            valid_codegen = bool(recorded) and all(
-                (project / name).resolve().is_relative_to((project / 'generated').resolve())
-                and (project / name).is_file() and file_hash(project / name) == sha
-                for name, sha in recorded.items())
-        except (ValueError, OSError, AttributeError):
-            pass
-    if not valid_codegen:
-        run('Recompilar PowerPC para C++', [generator, 'codegen', manifest])
-        generated = [p for p in (project / 'generated').rglob('*') if p.is_file()]
-        if not generated:
-            raise PortError('BUILD_CODEGEN', 'O gerador não produziu arquivos C++.')
-        stamp.write_text(json.dumps({str(p.relative_to(project)): file_hash(p) for p in generated}))
+    if reusable_host:
+        emit({'stage': 'codegen', 'state': 'completed', 'message': 'CPU já gerada e verificada; reutilizando'})
+        emit({'stage': 'compile', 'state': 'running', 'message': 'Atualizando somente componentes gráficos'})
+        build.mkdir(parents=True, exist_ok=True)
+        destination = build / reusable_host.name
+        if reusable_host.resolve() != destination.resolve():
+            shutil.copy2(reusable_host, destination)
     else:
-        emit({'task': 'Reutilizar C++ já gerado', 'state': 'completed'})
-    emit({'stage': 'codegen', 'state': 'completed'})
-    emit({'stage': 'compile', 'state': 'running', 'message': 'Configurando a compilação'})
-    run('Configurar build', [cmake, '-S', project, '-B', build, '-G', 'Ninja',
-                             '-DCMAKE_BUILD_TYPE=RelWithDebInfo', f'-DCMAKE_PREFIX_PATH={prefix}',
-                             f'-DCMAKE_CXX_COMPILER={compiler}', f'-DCMAKE_MAKE_PROGRAM={ninja}',
-                             '-DCMAKE_FIND_USE_PACKAGE_REGISTRY=OFF', '-DCMAKE_FIND_USE_SYSTEM_PACKAGE_REGISTRY=OFF'])
-    run('Compilar port local', [cmake, '--build', build, '--parallel', str(jobs)])
+        manifest = project / 'aster_green_lantern_manifest.toml'
+        if not manifest.is_file():
+            run('Criar projeto nativo', [generator, 'init', '--project-name', 'aster_green_lantern',
+                                        '--xex-path', xex, '--game-root', game, '--project-root', project])
+            shutil.copy2(hints, project / 'hints.toml')
+            # SDK init lowercases asset paths and emits an empty includes list.
+            # Preserve the actual case on Linux and write one unambiguous manifest.
+            def relative(path):
+                try:
+                    return Path(os.path.relpath(path, project)).as_posix()
+                except ValueError:  # Different Windows drives.
+                    return path.as_posix()
+            manifest.write_text('[project]\nname = "aster_green_lantern"\nsdk_version = "0.10.0"\n'
+                                + 'game_root = ' + json.dumps(relative(game), ensure_ascii=False) + '\n\n'
+                                + '[entrypoint]\nfile_path = ' + json.dumps(relative(xex), ensure_ascii=False)
+                                + '\nout_directory_path = "generated/default"\nincludes = ["hints.toml"]\n')
+            shutil.copy2(hook, project / 'aster_timing.cpp')
+            cmake_file = project / 'CMakeLists.txt'
+            content = cmake_file.read_text()
+            content = content.replace('rexglue_setup_target(aster_green_lantern)',
+                                      'rexglue_setup_target(aster_green_lantern GPU_PLUGINS xenos)')
+            content += '\ntarget_sources(aster_green_lantern PRIVATE aster_timing.cpp)\n'
+            cmake_file.write_text(content)
+        stamp = project / 'aster-codegen.json'
+        valid_codegen = False
+        if stamp.is_file():
+            try:
+                recorded = json.loads(stamp.read_text())
+                valid_codegen = bool(recorded) and all(
+                    (project / name).resolve().is_relative_to((project / 'generated').resolve())
+                    and (project / name).is_file() and file_hash(project / name) == sha
+                    for name, sha in recorded.items())
+            except (ValueError, OSError, AttributeError):
+                pass
+        if not valid_codegen:
+            run('Recompilar PowerPC para C++', [generator, 'codegen', manifest])
+            generated = [p for p in (project / 'generated').rglob('*') if p.is_file()]
+            if not generated:
+                raise PortError('BUILD_CODEGEN', 'O gerador não produziu arquivos C++.')
+            stamp.write_text(json.dumps({str(p.relative_to(project)): file_hash(p) for p in generated}))
+        else:
+            emit({'task': 'Reutilizar C++ já gerado', 'state': 'completed'})
+        emit({'stage': 'codegen', 'state': 'completed'})
+        emit({'stage': 'compile', 'state': 'running', 'message': 'Configurando a compilação'})
+        run('Configurar build', [cmake, '-S', project, '-B', build, '-G', 'Ninja',
+                                 '-DCMAKE_BUILD_TYPE=RelWithDebInfo', f'-DCMAKE_PREFIX_PATH={prefix}',
+                                 f'-DCMAKE_CXX_COMPILER={compiler}', f'-DCMAKE_MAKE_PROGRAM={ninja}',
+                                 '-DCMAKE_FIND_USE_PACKAGE_REGISTRY=OFF', '-DCMAKE_FIND_USE_SYSTEM_PACKAGE_REGISTRY=OFF'])
+        run('Compilar port local', [cmake, '--build', build, '--parallel', str(jobs)])
     emit({'stage': 'compile', 'state': 'completed'})
     emit({'stage': 'verify', 'state': 'running', 'message': 'Conferindo o executável e as bibliotecas'})
     suffix = '.exe' if os.name == 'nt' else ''
@@ -312,6 +337,8 @@ def _build_native(source, workspace, cancel=None, emit=None, jobs=2, allow_downl
                 shutil.copy2(library, build / library.name)
     if cache_plugin:
         shutil.copy2(cache_plugin, build / cache_plugin.name)
+    if presenter_filter:
+        shutil.copy2(presenter_filter, build / presenter_filter.name)
     if os.name != 'nt':
         run('Verificar bibliotecas', ['ldd', binary], timeout=30)
         result = run_process(['ldd', str(binary)], root, cancel, timeout=30, env=env)

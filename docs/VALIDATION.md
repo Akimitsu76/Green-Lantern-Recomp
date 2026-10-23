@@ -1,3 +1,15 @@
+# Validação da atualização v0.1.2
+
+- Regressão em display virtual: 176 testes, sem falhas e sem skips no ambiente local com artefatos de integração.
+- Linux: geração pelo AppImage e validação do worker; ABI do presenter fixada no SDK 0.10.0; quatro variantes SPIR-V validadas.
+- Sessão 073: 120 segundos, Ultra/nitidez, saída 1080p/60 FPS, movimento e ataques; sem fatal ou destino não registrado.
+- Sessão 074: 180 segundos, Alta/bicúbico com dithering, saída 1080p/30 FPS, movimento e combate; sem fatal ou destino não registrado. Após 80 segundos, 2.908 intervalos de log PRESENT: mediana 33 ms, p99 35 ms, máximo 50 ms. São intervalos do backend, não medições de scanout nem garantia para outras cenas.
+- Os comparativos anteriores não repetiram o mesmo trajeto; não sustentam uma porcentagem de ganho de desempenho.
+- Saves principais preservados por conferência de hashes. Atualizações de GPU podem reutilizar CPU previamente validada quando as entradas de geração não mudaram.
+- Windows: launcher empacotado e smoke test via Wine; jogo em Windows real continua sem validação.
+
+## Histórico anterior (não representa todos os recursos atuais)
+
 # Validação executada — 22–23/10/2026
 
 ## Arquivos únicos — 23/10/2026

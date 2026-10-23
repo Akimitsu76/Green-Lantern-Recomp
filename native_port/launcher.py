@@ -18,7 +18,7 @@ from tkinter import filedialog, messagebox, ttk
 
 from games.green_lantern import GreenLantern
 from . import graphics, settings
-from .native_build import build_native, read_install
+from .native_build import build_native, read_install, INTEGRATION_VERSION
 from .paths import project_root, python_command, external_env
 from .diagnostics import diagnostics
 from .errors import PortError
@@ -104,6 +104,7 @@ class Launcher:
         self.fps_target = tk.StringVar(value=cfg['graphics']['fps_target'])
         self.vsync = tk.BooleanVar(value=cfg['graphics']['vsync'])
         self.shader_mode = tk.StringVar(value=cfg['graphics']['shader_mode'])
+        self.upscaler = tk.StringVar(value=graphics.UPSCALER_LABELS[cfg['graphics']['upscaler']])
         self.output_resolution = tk.StringVar(value=cfg['graphics']['output_resolution'])
         self.custom_render_scale = tk.IntVar(value=cfg['graphics']['render_scale'])
         self.custom_msaa = tk.BooleanVar(value=cfg['graphics']['msaa_2x'])
@@ -293,7 +294,7 @@ class Launcher:
                         self.source_entry, self.work_entry, self.jobs_spin, self.save_button,
                         self.doctor_button, self.clear_button, self.export_button,
                         self.copy_button, self.restore_graphics_button, self.build_start_button]
-        self._readonly_widgets = [self.build_combo, self.shader_combo, self.output_combo]
+        self._readonly_widgets = [self.build_combo, self.shader_combo, self.output_combo, self.upscaler_combo]
 
     # -------------------------------------------------------------- play tab
     def _build_play_tab(self):
@@ -528,8 +529,8 @@ class Launcher:
         preset_text = {
             'low': 'BAIXA\n720p · leve',
             'default': 'PADRÃO\n720p · equilíbrio',
-            'high': 'ALTA\nfiltragem 8x',
-            'ultra': 'ULTRA\nfiltragem 16x',
+            'high': 'ALTA\nbicúbico + 8x',
+            'ultra': 'ULTRA\nnitidez + 16x',
             'custom': 'PERSONALIZADA\najuste fino',
         }
         for index, name in enumerate(graphics.PRESETS):
@@ -559,11 +560,11 @@ class Launcher:
         self.target_note = tk.Label(self.graphics_tab, text='', bg=BG, fg=MUTED,
                                     font=(FONT, 9), wraplength=1050, justify='left')
         self.target_note.pack(anchor='w', pady=(7, 0))
-        tk.Label(self.graphics_tab, text='Compatibilidade: escala interna 1x em todos os presets. 2x/3x causaram áreas pretas; a resolução da janela pode ser Full HD ou maior.',
+        tk.Label(self.graphics_tab, text='Compatibilidade: escala interna 1x em todos os presets. 2x/3x causaram áreas pretas. Alta/Ultra usam ampliação espacial no Linux; texturas originais são preservadas.',
                  bg=BG, fg=MUTED, font=(FONT, 8), wraplength=1030, justify='left').pack(anchor='w', pady=(4, 0))
-        options = self._card(self.graphics_tab, fill='x', pady=(12, 0))
+        options = self._card(self.graphics_tab, fill='x', pady=(8, 0))
         options_left = tk.Frame(options, bg=CARD)
-        options_left.pack(side='left', fill='both', expand=True, padx=16, pady=13)
+        options_left.pack(side='left', fill='both', expand=True, padx=16, pady=9)
         self._caps(options_left, 'Sessão').pack(anchor='w')
         display_row = tk.Frame(options_left, bg=CARD)
         display_row.pack(fill='x', pady=(8, 0))
@@ -573,17 +574,23 @@ class Launcher:
         self.output_combo.pack(side='left', padx=8)
         tk.Label(options_left, text='1920x1080 = Full HD. A escala interna é independente.',
                  bg=CARD, fg=MUTED, font=(FONT, 8)).pack(anchor='w', pady=(5, 0))
+        upscale_row = tk.Frame(options_left, bg=CARD)
+        upscale_row.pack(fill='x', pady=(6, 0))
+        tk.Label(upscale_row, text='Ampliação (Linux)', bg=CARD, fg=MUTED, font=(FONT, 9)).pack(side='left')
+        self.upscaler_combo = ttk.Combobox(upscale_row, textvariable=self.upscaler, values=[graphics.UPSCALER_LABELS[key] for key in (graphics.UPSCALERS if sys.platform == 'linux' else ('bilinear',))], state='readonly', width=20)
+        self.upscaler_combo.pack(side='left', padx=8)
+        self.upscaler_combo.bind('<<ComboboxSelected>>', lambda _: self._on_custom_changed())
         self.vsync_check = ttk.Checkbutton(options_left, text='VSync', variable=self.vsync)
-        self.vsync_check.pack(anchor='w', pady=(8, 0))
+        self.vsync_check.pack(anchor='w', pady=(4, 0))
         shader_row = tk.Frame(options_left, bg=CARD)
-        shader_row.pack(fill='x', pady=(8, 0))
+        shader_row.pack(fill='x', pady=(5, 0))
         tk.Label(shader_row, text='Shaders novos', bg=CARD, fg=MUTED,
                  font=(FONT, 9)).pack(side='left')
         self.shader_combo = ttk.Combobox(shader_row, textvariable=self.shader_mode,
                                          values=graphics.SHADER_MODES, state='readonly', width=10)
         self.shader_combo.pack(side='left', padx=(8, 0))
-        tk.Label(options_left, text='async compila novos shaders em segundo plano; ainda pode haver engasgos. '
-                  'Os conhecidos são preparados antes de entrar; o cache é preservado.', bg=CARD, fg=MUTED, font=(FONT, 8),
+        tk.Label(options_left, text='async: novos shaders em segundo plano. '
+                  'O primeiro uso ainda pode causar pausas.', bg=CARD, fg=MUTED, font=(FONT, 8),
                  wraplength=390, justify='left').pack(anchor='w', pady=(9, 0))
         options_right = tk.Frame(options, bg=CARD)
         options_right.pack(side='right', fill='both', expand=True, padx=16, pady=13)
@@ -613,6 +620,7 @@ class Launcher:
         self.dither_check = ttk.Checkbutton(self.custom_grid, text='Dithering',
                                             variable=self.custom_dither)
         self.dither_check.grid(row=2, column=0, columnspan=2, sticky='w', pady=(5, 0))
+        tk.Label(options_right, text='Cache maior não aumenta resolução das texturas.\nFiltro espacial melhora a saída sem alterar os buffers do jogo.', bg=CARD, fg=MUTED, font=(FONT,8), wraplength=430, justify='left').pack(anchor='w', pady=(5,0))
         tk.Label(options_right, text='Mudar um valor ativa o preset Personalizada automaticamente.',
                  bg=CARD, fg=MUTED, font=(FONT, 8), wraplength=440,
                  justify='left').pack(anchor='w', pady=(8, 0))
@@ -739,6 +747,7 @@ class Launcher:
             self.fps_target.set(data['fps_target'])
             self.vsync.set(data['vsync'])
             self.shader_mode.set(data['shader_mode'])
+            self.upscaler.set(graphics.UPSCALER_LABELS[data['upscaler']])
             self.output_resolution.set('Automática' if data['output_resolution'] == 'auto' else data['output_resolution'])
             self.custom_render_scale.set(1)
             self.custom_msaa.set(data['msaa_2x'])
@@ -760,6 +769,7 @@ class Launcher:
         if preset == 'custom':
             return graphics.from_options(
                 'custom',
+                upscaler={label: key for key, label in graphics.UPSCALER_LABELS.items()}.get(self.upscaler.get(), 'bilinear'),
                 render_scale=1,
                 msaa_2x=self.custom_msaa.get(),
                 anisotropic=ANISO_BY_LABEL.get(self.custom_aniso.get(), 3),
@@ -917,14 +927,25 @@ class Launcher:
         binary, report = MODE_FILES[target]
         return PROJECT / binary, PROJECT / report
 
+    def _backend_update_needed(self):
+        try:
+            installation = read_install(PROJECT)
+        except PortError:
+            return False
+        return bool(installation and installation.get('platform') == 'linux-amd64' and installation.get('recipe', {}).get('integration', 0) < INTEGRATION_VERSION)
+
     def _engine_ready(self, target=None):
+        if self._backend_update_needed():
+            return False
         binary, report = self._engine_paths(target)
         return binary.is_file() and report.is_file()
 
     def _refresh_engine_status(self):
         target = self.fps_target.get()
         binary, report = self._engine_paths(target)
-        if binary.is_file() and report.is_file():
+        if self._backend_update_needed():
+            self.engine_status.set('Atualize o backend em Gerar port para ativar shaders e filtros novos')
+        elif binary.is_file() and report.is_file():
             self.engine_status.set('Build e referência locais encontrados')
         elif binary.is_file():
             self.engine_status.set('Build encontrado; falta o probe FSI de referência')
@@ -937,7 +958,7 @@ class Launcher:
             return
         ready = self._source_ready() and self._engine_ready()
         self.play_button.configure(state='normal' if self._source_ready() else 'disabled',
-                                   text='JOGAR AGORA' if ready else 'GERAR PORT NATIVO')
+                                   text='JOGAR AGORA' if ready else 'ATUALIZAR PORT' if self._backend_update_needed() else 'GERAR PORT NATIVO')
         self.compile_button.configure(state='normal' if self._source_ready() else 'disabled')
         self.build_start_button.configure(state='normal' if self._source_ready() else 'disabled')
 
@@ -1066,7 +1087,7 @@ class Launcher:
                    '--vsync', 'on' if data['vsync'] else 'off',
                    '--fps-target', data['fps_target'],
                    '--output-resolution', data['output_resolution'],
-                   '--graphics-preset', data['preset']]
+                   '--graphics-preset', data['preset'], '--upscaler', data['upscaler']]
         if data['preset'] == 'custom':
             command += ['--render-scale', str(data['render_scale']),
                                                 '--anisotropic', str(data['anisotropic']),

@@ -14,13 +14,12 @@ distribuído neste repositório.
 
 ## Downloads
 
-A prerelease experimental **v0.1.0** oferece arquivos únicos, sem ZIP para
-extrair:
+As releases oferecem arquivos únicos. A atualização experimental **v0.1.2** está preparada localmente; os links abaixo apontam para a página de downloads publicados:
 
-- [Windows x64 — AsterNative-windows-x64.exe](https://github.com/Akimitsu76/Green-Lantern-Recomp/releases/download/v0.1.0/AsterNative-windows-x64.exe)
-- [Linux x86-64 — AsterNative-linux-x86_64.AppImage](https://github.com/Akimitsu76/Green-Lantern-Recomp/releases/download/v0.1.0/AsterNative-linux-x86_64.AppImage)
-- [SHA-256 dos downloads](https://github.com/Akimitsu76/Green-Lantern-Recomp/releases/download/v0.1.0/SHA256SUMS)
-- [Página da release](https://github.com/Akimitsu76/Green-Lantern-Recomp/releases/tag/v0.1.0)
+- [Windows x64 — AsterNative-windows-x64.exe](https://github.com/Akimitsu76/Green-Lantern-Recomp/releases)
+- [Linux x86-64 — AsterNative-linux-x86_64.AppImage](https://github.com/Akimitsu76/Green-Lantern-Recomp/releases)
+- [SHA-256 dos downloads](https://github.com/Akimitsu76/Green-Lantern-Recomp/releases)
+- [Página da release](https://github.com/Akimitsu76/Green-Lantern-Recomp/releases)
 
 Os antigos pacotes em pasta (`.zip`/`.tar.gz`) são formatos anteriores e não são
 necessários para este fluxo. Não é preciso instalar Python nem manter
@@ -90,6 +89,12 @@ Builds, downloads, configurações e perfis ficam em `.aster` dentro dessa pasta
 Para usar outra pasta de dados, defina `ASTER_DATA_HOME`. A pasta temporária de
 extração do PyInstaller/AppImage não é usada para dados permanentes.
 
+## Atualização gráfica experimental
+
+No Linux, pipelines Vulkan novos podem ser preparados em segundo plano. Pipelines com escrita de memória permanecem síncronos por correção; a retenção de quadro completo e o primeiro encontro com shaders ainda podem causar pausas. O cache conhecido é reutilizado e preparado antes da partida. Não há promessa de ausência total de engasgos.
+
+A saída oferece 1920×1080, 1440p e 4K; a renderização interna permanece em 1280×720. No Linux, Alta usa ampliação bicúbica e Ultra acrescenta nitidez; no Windows ambos usam bilinear e mantêm as diferenças de filtragem anisotrópica/cache. Cache maior não adiciona texturas HD. Veja [SPATIAL_FILTER.md](docs/SPATIAL_FILTER.md).
+
 ## Estado e limitações
 
 - **Linux:** geração completa pelo AppImage, abertura da interface, arquivo
@@ -100,7 +105,7 @@ extração do PyInstaller/AppImage não é usada para dados permanentes.
   execução **do jogo em Windows real não foram validadas**. Não trate o host
   Windows como certificado.
 - **Gráficos/FPS:** 30 FPS é o padrão. 60 FPS e ilimitado são experimentais,
-  pedem confirmação e usam perfis separados. As medições anteriores de 30/60 na
+  pedem confirmação e compartilham o save da pasta do usuário. As medições anteriores de 30/60 na
   tela inicial eram de apresentação; não são certificação de FPS durante toda a
   jogabilidade. Física, animações e áudio em alvos elevados não estão
   integralmente corrigidos nem certificados.
@@ -112,8 +117,8 @@ extração do PyInstaller/AppImage não é usada para dados permanentes.
 
 ## Testes e validação
 
-A última regressão local executou **163 testes** em Xvfb 1440×900; todos passaram,
-sem falhas e sem skips. Ela cobre o launcher Tk, presets/CVars, perfis de FPS, validação de destinos,
+A última regressão local executou **176 testes** em Xvfb 1440×900; todos passaram,
+sem falhas e sem skips. Ela cobre o launcher Tk, presets/CVars, saves compartilhados, validação de destinos,
 empacotamento, persistência de dados, extração segura do payload e caminhos dos
 workers. Três testes de integração que dependem de artefatos gerados localmente
 são pulados automaticamente em um checkout limpo; esses artefatos não fazem

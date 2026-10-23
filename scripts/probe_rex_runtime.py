@@ -127,6 +127,8 @@ def main() -> int:
                         help='Legacy alias for --fps-target unlimited.')
     parser.add_argument('--graphics-preset', choices=graphics.PRESETS,
                         help='Apply a real graphics preset to this isolated probe.')
+    parser.add_argument('--upscaler', choices=graphics.UPSCALERS, default=None)
+    parser.add_argument('--output-resolution', choices=graphics.OUTPUT_RESOLUTIONS, default='auto')
     parser.add_argument('--render-scale', type=int, choices=(1, 2, 3))
     parser.add_argument('--msaa', choices=('on', 'off'))
     parser.add_argument('--anisotropic', type=int, choices=tuple(graphics.ANISOTROPIC_LABELS))
@@ -269,9 +271,11 @@ def main() -> int:
     env = os.environ.copy()
     if args.presenter_compat:
         compatibility = args.presenter_compat.resolve(strict=True)
-        if not compatibility.is_relative_to((root / '.aster/build').resolve()) or compatibility.suffix != '.so':
-            parser.error('Compatibility library must be a local .aster/build shared library.')
+        if not any(compatibility.is_relative_to((root / allowed).resolve()) for allowed in ('.aster/build', '.aster/native')) or compatibility.suffix != '.so':
+            parser.error('Compatibility library must be a local .aster/build or .aster/native shared library.')
         env['LD_PRELOAD'] = str(compatibility)
+        if args.upscaler:
+            env['ASTER_PRESENT_FILTER'] = args.upscaler
     for key, name in (("XDG_CONFIG_HOME", "config"), ("XDG_CACHE_HOME", "xdg-cache"),
                       ("XDG_DATA_HOME", "data")):
         directory = run / name
@@ -304,7 +308,8 @@ def main() -> int:
                 anisotropic=args.anisotropic,
                 texture_quality=args.texture_quality,
                 present_dither=None if args.dither is None else args.dither == 'on',
-                fps_target=fps_target, vsync=args.vsync == 'on', shader_mode=args.shader_mode)
+                fps_target=fps_target, vsync=args.vsync == 'on', shader_mode=args.shader_mode,
+                upscaler=args.upscaler or env.get('ASTER_PRESENT_FILTER'), output_resolution=args.output_resolution)
         except Exception as exc:
             parser.error(str(exc))
         command.extend(graphics.cvar_arguments(graphics_data))
@@ -461,6 +466,9 @@ def main() -> int:
               "runtime_root": str(run),
               "fps_target": fps_target,
               "graphics": graphics_data,
+              "presenter_filter_environment": env.get("ASTER_PRESENT_FILTER", "bilinear"),
+              "presenter_compat_path": str(compatibility) if args.presenter_compat else None,
+              "presenter_compat_sha256": sha256(compatibility) if args.presenter_compat else None,
               "audio_check": audio_check,
               "live_results": str(attempt / 'live-results.jsonl') if args.live_input else None,
               "retained_log_files": log_files,
