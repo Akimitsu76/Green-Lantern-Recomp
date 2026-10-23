@@ -14,12 +14,14 @@ distribuído neste repositório.
 
 ## Downloads
 
-As releases oferecem arquivos únicos. A atualização experimental **v0.1.2** está preparada localmente; os links abaixo apontam para a página de downloads publicados:
+As releases oferecem arquivos únicos. A atualização experimental **v0.1.2** foi publicada como prerelease; os links abaixo baixam os assets diretamente:
 
-- [Windows x64 — AsterNative-windows-x64.exe](https://github.com/Akimitsu76/Green-Lantern-Recomp/releases)
-- [Linux x86-64 — AsterNative-linux-x86_64.AppImage](https://github.com/Akimitsu76/Green-Lantern-Recomp/releases)
-- [SHA-256 dos downloads](https://github.com/Akimitsu76/Green-Lantern-Recomp/releases)
-- [Página da release](https://github.com/Akimitsu76/Green-Lantern-Recomp/releases)
+- [Windows x64 — AsterNative-windows-x64.exe](https://github.com/Akimitsu76/Green-Lantern-Recomp/releases/download/v0.1.2/AsterNative-windows-x64.exe)
+- [Linux x86-64 — AsterNative-linux-x86_64.AppImage](https://github.com/Akimitsu76/Green-Lantern-Recomp/releases/download/v0.1.2/AsterNative-linux-x86_64.AppImage)
+- [SHA-256 dos downloads](https://github.com/Akimitsu76/Green-Lantern-Recomp/releases/download/v0.1.2/SHA256SUMS)
+- [Página da release](https://github.com/Akimitsu76/Green-Lantern-Recomp/releases/tag/v0.1.2)
+
+As releases anteriores continuam disponíveis na [página de releases](https://github.com/Akimitsu76/Green-Lantern-Recomp/releases).
 
 Os antigos pacotes em pasta (`.zip`/`.tar.gz`) são formatos anteriores e não são
 necessários para este fluxo. Não é preciso instalar Python nem manter
