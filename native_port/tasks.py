@@ -18,7 +18,7 @@ class Cancellation:
             raise PortError('CANCELLED', 'Operação cancelada.')
 
 
-def run_process(argv, cwd, cancel, timeout=120, env=None):
+def run_process(argv, cwd, cancel, timeout=120, env=None, on_output=None):
     """Internal trusted calls only; never accepts argv from a game manifest or UI.
 
     No shell, own process group; cancellation kills descendants and reaps parent.
@@ -28,11 +28,27 @@ def run_process(argv, cwd, cancel, timeout=120, env=None):
     start = time.monotonic()
     cancel.check()
     try:
-        with tempfile.TemporaryFile() as out, tempfile.TemporaryFile() as err:
+        with tempfile.TemporaryDirectory(prefix='aster-task-') as spool, \
+                open(os.path.join(spool, 'stdout'), 'w+b') as out, \
+                open(os.path.join(spool, 'stderr'), 'w+b') as err, \
+                open(os.path.join(spool, 'stdout'), 'rb') as live:
+            pending = b''
+            def stream():
+                nonlocal pending
+                if on_output is None:
+                    return
+                chunk = live.read(65536)
+                if chunk:
+                    parts = (pending + chunk).replace(b'\r', b'\n').split(b'\n')
+                    pending = parts.pop()[-16384:]
+                    for line in parts[-128:]:
+                        if line:
+                            on_output(line.decode('utf8', errors='replace'))
             with subprocess.Popen(argv, cwd=cwd, stdout=out, stderr=err,
                                   start_new_session=True, env=env) as proc:
                 try:
                     while proc.poll() is None:
+                        stream()
                         cancel.check()
                         if time.monotonic() - start > timeout:
                             raise PortError('TIMEOUT', 'Tempo limite da tarefa excedido.')
@@ -50,6 +66,9 @@ def run_process(argv, cwd, cancel, timeout=120, env=None):
                         pass
                     proc.wait()
                     raise
+                stream()
+                if on_output and pending:
+                    on_output(pending.decode('utf8', errors='replace'))
                 def tail(f):
                     f.seek(0, 2)
                     f.seek(max(0, f.tell()-65536))

@@ -39,6 +39,7 @@ def validate(data, project):
     if type(result['jobs']) is not int or not 1 <= result['jobs'] <= 64:
         raise PortError('SETTINGS_VALUE', 'Número de tarefas deve ficar entre 1 e 64.')
     result['graphics'] = graphics.validate(result['graphics'])
+    result['graphics']['render_scale'] = 1  # Supersampling is visually broken for this title.
     return result
 
 

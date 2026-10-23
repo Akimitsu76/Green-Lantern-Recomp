@@ -151,6 +151,8 @@ def main() -> int:
                         help='Measure only this process playback streams at the given elapsed seconds.')
     parser.add_argument('--allow-invalid-fetch', action='store_true',
                         help='Test SDK compatibility mode for invalid-type GPU fetch descriptors.')
+    parser.add_argument('--presenter-compat', type=Path,
+                        help='Load the pinned local presenter compatibility library for this child only.')
     parser.add_argument('--press', action='append', default=[], metavar='SECONDS:KEY[:HOLD]',
                         help='Send controller-mapped keys (Return, space, WASD, arrows) to this window only.')
     args = parser.parse_args()
@@ -265,6 +267,11 @@ def main() -> int:
     except FileExistsError:
         parser.error("Attempt label already exists; evidence will not be overwritten.")
     env = os.environ.copy()
+    if args.presenter_compat:
+        compatibility = args.presenter_compat.resolve(strict=True)
+        if not compatibility.is_relative_to((root / '.aster/build').resolve()) or compatibility.suffix != '.so':
+            parser.error('Compatibility library must be a local .aster/build shared library.')
+        env['LD_PRELOAD'] = str(compatibility)
     for key, name in (("XDG_CONFIG_HOME", "config"), ("XDG_CACHE_HOME", "xdg-cache"),
                       ("XDG_DATA_HOME", "data")):
         directory = run / name

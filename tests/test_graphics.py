@@ -9,8 +9,8 @@ class GraphicsPresetTests(unittest.TestCase):
         expected = {
             'low': (1, True, 1, 'low', False),
             'default': (1, True, 3, 'default', False),
-            'high': (2, True, 4, 'high', False),
-            'ultra': (3, True, 5, 'ultra', False),
+            'high': (1, True, 4, 'high', False),
+            'ultra': (1, True, 5, 'ultra', False),
         }
         for name, values in expected.items():
             with self.subTest(preset=name):
@@ -42,11 +42,21 @@ class GraphicsPresetTests(unittest.TestCase):
         self.assertEqual(graphics.internal_resolution(3), '3840x2160')
         self.assertEqual(graphics.texture_limits('ultra'), (768, 1536, 48))
 
+    def test_full_hd_output_is_independent_of_internal_scale(self):
+        data = graphics.from_options('default', output_resolution='1920x1080')
+        self.assertEqual(data['render_scale'], 1)
+        self.assertEqual(data['output_resolution'], '1920x1080')
+        self.assertIn('--window_width=1920', graphics.cvar_arguments(data))
+        self.assertIn('--window_height=1080', graphics.cvar_arguments(data))
+        self.assertEqual(graphics.apply_preset('high', data)['output_resolution'], '1920x1080')
+        with self.assertRaises(PortError):
+            graphics.from_options(output_resolution='1920x1080 --bad')
+
     def test_cvar_arguments_are_deterministic_real_flags(self):
         data = graphics.from_options('high', fps_target='30', vsync=True)
         arguments = graphics.cvar_arguments(data)
         self.assertEqual(arguments, [
-            '--resolution_scale=2', '--anisotropic_override=4',
+            '--resolution_scale=1', '--anisotropic_override=4',
             '--texture_cache_memory_limit_soft=512',
             '--texture_cache_memory_limit_hard=1024',
             '--texture_cache_memory_limit_render_to_texture=32',

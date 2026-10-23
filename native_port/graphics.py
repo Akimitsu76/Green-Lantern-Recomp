@@ -19,19 +19,20 @@ PRESET_LABELS = {
 PRESET_DESCRIPTIONS = {
     'low': 'Máximo desempenho: 720p interno, MSAA do jogo e cache de texturas reduzido.',
     'default': 'Equilíbrio original: 720p interno, MSAA do jogo e 4x anisotrópico.',
-    'high': 'Visual mais nítido: 1440p interno, MSAA do jogo e 8x anisotrópico.',
-    'ultra': 'Superamostragem: 2160p interno, MSAA do jogo e 16x anisotrópico.',
+    'high': 'Filtragem 8x e cache maior; resolução interna nativa para compatibilidade.',
+    'ultra': 'Filtragem 16x e cache máximo; resolução interna nativa para compatibilidade.',
     'custom': 'Escolha resolução interna, MSAA, filtragem e memória de texturas.',
 }
 TARGETS = ('30', '60', 'unlimited')
 TARGET_LABELS = {'30': '30 fps', '60': '60 fps', 'unlimited': 'Ilimitado'}
 TARGET_DESCRIPTIONS = {
-    '30': 'Padrão e perfil principal. Menor carga de CPU/GPU.',
-    '60': 'Experimental. Usa port local e perfil isolado; não altera o save de 30 fps.',
+    '30': 'Padrão. Menor carga de CPU/GPU. Save compartilhado do usuário.',
+    '60': 'Experimental. Usa o mesmo save do usuário, independente dos gráficos.',
     'unlimited': ('Experimental. Remove a espera de pacing, desliga VSync e usa '
                   'apresentação imediata; a simulação mantém alvo 60.'),
 }
 SHADER_MODES = ('async', 'blocking')
+OUTPUT_RESOLUTIONS = ('auto', '1280x720', '1920x1080', '2560x1440', '3840x2160')
 TEXTURE_QUALITIES = ('low', 'default', 'high', 'ultra')
 TEXTURE_QUALITY_LABELS = {
     'low': 'Leve', 'default': 'Padrão', 'high': 'Alta', 'ultra': 'Ultra',
@@ -57,9 +58,9 @@ _PRESET_VALUES = {
             'texture_quality': 'low', 'present_dither': False},
     'default': {'render_scale': 1, 'msaa_2x': True, 'anisotropic': 3,
                 'texture_quality': 'default', 'present_dither': False},
-    'high': {'render_scale': 2, 'msaa_2x': True, 'anisotropic': 4,
+    'high': {'render_scale': 1, 'msaa_2x': True, 'anisotropic': 4,
              'texture_quality': 'high', 'present_dither': False},
-    'ultra': {'render_scale': 3, 'msaa_2x': True, 'anisotropic': 5,
+    'ultra': {'render_scale': 1, 'msaa_2x': True, 'anisotropic': 5,
               'texture_quality': 'ultra', 'present_dither': False},
     'custom': {'render_scale': 1, 'msaa_2x': True, 'anisotropic': 3,
                'texture_quality': 'default', 'present_dither': False},
@@ -73,6 +74,7 @@ def defaults():
         'fps_target': '30',
         'vsync': True,
         'shader_mode': 'async',
+        'output_resolution': 'auto',
     }
 
 
@@ -95,7 +97,7 @@ def apply_preset(name, current=None):
 
 def from_options(preset='default', *, render_scale=None, msaa_2x=None,
                  anisotropic=None, texture_quality=None, present_dither=None,
-                 fps_target='30', vsync=True, shader_mode='async'):
+                 fps_target='30', vsync=True, shader_mode='async', output_resolution='auto'):
     """Build a graphics block from CLI/UI values.
 
     Any explicit rendering override switches the block to ``custom`` so a
@@ -120,7 +122,7 @@ def from_options(preset='default', *, render_scale=None, msaa_2x=None,
             applied = True
     if applied and preset != 'custom':
         values['preset'] = 'custom'
-    values.update(fps_target=fps_target, vsync=vsync, shader_mode=shader_mode)
+    values.update(fps_target=fps_target, vsync=vsync, shader_mode=shader_mode, output_resolution=output_resolution)
     return validate(values)
 
 
@@ -141,6 +143,8 @@ def validate(data):
         raise PortError('GRAPHICS_VALUE', 'VSync inválido.')
     if result['shader_mode'] not in SHADER_MODES:
         raise PortError('GRAPHICS_VALUE', 'Modo de shaders inválido.')
+    if result['output_resolution'] not in OUTPUT_RESOLUTIONS:
+        raise PortError('GRAPHICS_VALUE', 'Resolução de saída inválida.')
     render_scale = result['render_scale']
     if type(render_scale) is not int or not 1 <= render_scale <= 3:
         raise PortError('GRAPHICS_VALUE', 'Resolução interna deve ficar entre 1x e 3x.')
@@ -179,7 +183,7 @@ def cvar_arguments(data):
     """Map a validated graphics block to deterministic ReXGlue CVar flags."""
     data = validate(data)
     soft, hard, rtt = texture_limits(data['texture_quality'])
-    return [
+    arguments = [
         f"--resolution_scale={data['render_scale']}",
         f"--anisotropic_override={data['anisotropic']}",
         f"--texture_cache_memory_limit_soft={soft}",
@@ -187,6 +191,10 @@ def cvar_arguments(data):
         f"--texture_cache_memory_limit_render_to_texture={rtt}",
         f"--present_dither={str(data['present_dither']).lower()}",
     ]
+    if data['output_resolution'] != 'auto':
+        width, height = data['output_resolution'].split('x')
+        arguments.extend([f'--window_width={width}', f'--window_height={height}'])
+    return arguments
 
 
 def summary(data):

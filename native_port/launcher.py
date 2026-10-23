@@ -1,7 +1,7 @@
 """Tk desktop launcher for the local Green Lantern port.
 
 The launcher only stores its own preferences. Game saves, cache and runtime
-data stay in the isolated profiles under .aster/runtime; graphics choices are
+data share one per-user profile under .aster/runtime; graphics choices are
 translated to command-line CVars and never written into the game profile.
 """
 from __future__ import annotations
@@ -28,15 +28,15 @@ from .tasks import Cancellation
 from .workspace import Workspace
 
 PROJECT = project_root(__file__)
-BG = '#0b1117'
-PANEL = '#111a22'
-CARD = '#16232c'
-CARD_ALT = '#1b2d36'
-LINE = '#263b43'
-INK = '#e8f4f0'
-MUTED = '#8fa6aa'
-ACCENT = '#6ee7b7'
-ACCENT_DARK = '#153f35'
+BG = '#0b0e12'
+PANEL = '#10151c'
+CARD = '#151c25'
+CARD_ALT = '#1c2632'
+LINE = '#293443'
+INK = '#f0f4f8'
+MUTED = '#94a3b7'
+ACCENT = '#b4ed74'
+ACCENT_DARK = '#263b25'
 WARN = '#ffcc66'
 WARN_BG = '#2b2519'
 DANGER = '#ff9b8f'
@@ -53,8 +53,8 @@ MODE_FILES = {
 }
 PROFILE_FILES = {
     '30': '.aster/runtime/green-lantern',
-    '60': '.aster/runtime/green-lantern-60fps',
-    'unlimited': '.aster/runtime/green-lantern-unlimited',
+    '60': '.aster/runtime/green-lantern',
+    'unlimited': '.aster/runtime/green-lantern',
 }
 TARGET_TITLES = {
     '30': 'Jogar 30 fps',
@@ -64,14 +64,22 @@ TARGET_TITLES = {
 ANISO_LABELS = dict(graphics.ANISOTROPIC_LABELS)
 ANISO_BY_LABEL = {label: value for value, label in ANISO_LABELS.items()}
 TEXTURE_BY_LABEL = {label: value for value, label in graphics.TEXTURE_QUALITY_LABELS.items()}
+BUILD_STAGES = (
+    ('dump', 'Conferir o dump', 'Identidade e integridade dos arquivos'),
+    ('tools', 'Preparar ferramentas', 'SDK e ambiente de compilação'),
+    ('cache', 'Preparar gráficos', 'Cache e bibliotecas da plataforma'),
+    ('codegen', 'Gerar código nativo', 'Traduzir o executável para este PC'),
+    ('compile', 'Compilar o port', 'Construir o executável e seus componentes'),
+    ('verify', 'Verificar instalação', 'Conferir os arquivos gerados'),
+)
 
 
 class Launcher:
     def __init__(self, root):
         self.root = root
         root.title('Aster Native | Green Lantern')
-        root.geometry('1160x720')
-        root.minsize(1088, 696)
+        root.geometry('1160x800')
+        root.minsize(1088, 720)
         root.configure(bg=BG)
         self.queue, self.events = queue.Queue(), []
         self.busy, self.cancel = False, Cancellation()
@@ -96,6 +104,7 @@ class Launcher:
         self.fps_target = tk.StringVar(value=cfg['graphics']['fps_target'])
         self.vsync = tk.BooleanVar(value=cfg['graphics']['vsync'])
         self.shader_mode = tk.StringVar(value=cfg['graphics']['shader_mode'])
+        self.output_resolution = tk.StringVar(value=cfg['graphics']['output_resolution'])
         self.custom_render_scale = tk.IntVar(value=cfg['graphics']['render_scale'])
         self.custom_msaa = tk.BooleanVar(value=cfg['graphics']['msaa_2x'])
         self.custom_aniso = tk.StringVar(value=ANISO_LABELS.get(cfg['graphics']['anisotropic'],
@@ -116,6 +125,15 @@ class Launcher:
         self.quick_profile = tk.StringVar(value='')
         self.report_path = tk.StringVar(value='Relatórios ficam dentro do diretório de trabalho.')
         self.preset_buttons, self.target_buttons = {}, {}
+        self.stage_states = {key: 'pending' for key, *_ in BUILD_STAGES}
+        self.active_stage = None
+        self.build_heading = tk.StringVar(value='Seu dump. Uma versão para o seu PC.')
+        self.build_detail = tk.StringVar(value='Selecione a pasta do jogo na Biblioteca para começar.')
+        self.build_count = tk.StringVar(value='0 de 6 etapas concluídas')
+        self.build_measure = tk.StringVar(value='Aguardando início')
+        self.build_elapsed = tk.StringVar(value='00:00')
+        self.build_running = False
+        self.task_started = time.monotonic()
         self._build_style()
         self._build_shell()
         self._set_graphics_vars(cfg['graphics'])
@@ -177,7 +195,10 @@ class Launcher:
                         foreground=ACCENT, font=(FONT, 9, 'bold'))
         style.map('PresetOn.TButton', background=[('active', '#1b5143')])
         style.configure('TNotebook', background=BG, borderwidth=0, tabmargins=(0, 4, 0, 0))
-        style.configure('TNotebook.Tab', padding=(18, 10), background=PANEL, foreground=MUTED,
+        style.configure('Modern.TNotebook', background=BG, borderwidth=0,
+                        bordercolor=BG, lightcolor=BG, darkcolor=BG)
+        style.layout('Modern.TNotebook.Tab', [])
+        style.configure('TNotebook.Tab', padding=(22, 12), background=BG, foreground=MUTED,
                         font=(FONT, 10, 'bold'), borderwidth=0)
         style.map('TNotebook.Tab', background=[('selected', CARD), ('active', CARD_ALT)],
                   foreground=[('selected', ACCENT), ('active', INK)])
@@ -195,7 +216,7 @@ class Launcher:
         style.configure('Treeview.Heading', background=PANEL, foreground=MUTED,
                         font=(FONT, 9, 'bold'))
         style.configure('Horizontal.TProgressbar', background=ACCENT, troughcolor=CARD_ALT,
-                        bordercolor=CARD_ALT, lightcolor=ACCENT, darkcolor=ACCENT)
+                        bordercolor=CARD_ALT, lightcolor=ACCENT, darkcolor=ACCENT, thickness=8)
 
     def _card(self, parent, **pack_options):
         card = tk.Frame(parent, bg=CARD, highlightthickness=1, highlightbackground=LINE)
@@ -216,55 +237,83 @@ class Launcher:
         brand.pack(side='left', fill='x', expand=True)
         tk.Label(brand, text='ASTER', bg=BG, fg=ACCENT,
                  font=(FONT, 22, 'bold')).pack(side='left')
-        tk.Label(brand, text='  NATIVE  /  GREEN LANTERN', bg=BG, fg=MUTED,
+        tk.Label(brand, text='  NATIVE   /   SUA BIBLIOTECA', bg=BG, fg=MUTED,
                  font=(FONT, 9, 'bold')).pack(side='left', padx=(10, 0), pady=(8, 0))
-        tk.Label(brand, text='Port local para PC · ' + ('D3D12 / ROV' if sys.platform == 'win32' else 'FSI / Vulkan'), bg=BG, fg=MUTED,
-                 font=(FONT, 9)).pack(side='left', padx=(20, 0), pady=(8, 0))
-        badge = tk.Label(header, text='AMBIENTE LOCAL  •  EM VALIDAÇÃO', bg=ACCENT_DARK,
+        badge = tk.Label(header, text='VERSÃO EXPERIMENTAL', bg=ACCENT_DARK,
                          fg=ACCENT, font=(FONT, 8, 'bold'), padx=12, pady=7)
         badge.pack(side='right')
         tk.Frame(shell, bg=LINE, height=1).pack(fill='x', pady=(0, 6))
-        self.tabs = ttk.Notebook(shell)
+        navigation = tk.Frame(shell, bg=BG)
+        navigation.pack(fill='x', pady=(0, 10))
+        self.tabs = ttk.Notebook(shell, style='Modern.TNotebook')
         self.tabs.pack(fill='both', expand=True)
         self.play_tab = tk.Frame(self.tabs, bg=BG, padx=12, pady=14)
+        self.build_tab = tk.Frame(self.tabs, bg=BG, padx=12, pady=14)
         self.graphics_tab = tk.Frame(self.tabs, bg=BG, padx=12, pady=14)
         self.game_tab = tk.Frame(self.tabs, bg=BG, padx=12, pady=14)
         self.diag_tab = tk.Frame(self.tabs, bg=BG, padx=12, pady=14)
-        self.tabs.add(self.play_tab, text='Jogar')
+        self.tabs.add(self.play_tab, text='Biblioteca')
+        self.tabs.add(self.build_tab, text='Gerar port')
         self.tabs.add(self.graphics_tab, text='Gráficos')
         self.tabs.add(self.game_tab, text='Jogo e arquivos')
         self.tabs.add(self.diag_tab, text='Diagnóstico')
+        self.nav_buttons = {}
+        for page, title in [(self.play_tab, 'Biblioteca'), (self.build_tab, 'Gerar port'),
+                            (self.graphics_tab, 'Gráficos'), (self.game_tab, 'Jogo e arquivos'),
+                            (self.diag_tab, 'Diagnóstico')]:
+            button = tk.Button(navigation, text=title, bg=BG, fg=MUTED, activebackground=CARD,
+                               activeforeground=INK, relief='flat', bd=0, highlightthickness=0, padx=22, pady=11,
+                               font=(FONT, 10, 'bold'), cursor='hand2',
+                               command=lambda tab=page: self.tabs.select(tab))
+            button.pack(side='left', padx=(0, 4))
+            self.nav_buttons[str(page)] = button
+        def navigation_changed(_=None):
+            selected = self.tabs.select()
+            for page, button in self.nav_buttons.items():
+                button.configure(bg=CARD if selected == page else BG,
+                                 fg=ACCENT if selected == page else MUTED)
+        self.tabs.bind('<<NotebookTabChanged>>', navigation_changed)
+        navigation_changed()
         self._build_play_tab()
+        self._build_generation_tab()
         self._build_graphics_tab()
         self._build_game_tab()
         self._build_diag_tab()
         footer = tk.Frame(shell, bg=BG)
-        footer.pack(fill='x', pady=(4, 0))
+        footer.pack(side='bottom', fill='x', pady=(4, 0), before=self.tabs)
         self.status_bar = tk.Label(footer, textvariable=self.status, bg=PANEL, fg=MUTED,
                                    anchor='w', justify='left', padx=12, pady=8,
                                    font=(FONT, 9), wraplength=800)
         self.status_bar.pack(side='left', fill='x', expand=True)
-        tk.Label(footer, text=str(PROJECT / '.aster/config/settings.json'), bg=BG, fg='#5d7378',
-                 font=(MONO, 8), padx=8).pack(side='right')
+        tk.Label(footer, text='SEUS ARQUIVOS · SEU PC', bg=BG, fg=MUTED,
+                 font=(FONT, 8), padx=8).pack(side='right')
         self.widgets = [self.folder_button, self.select_button, self.inspect_button,
                         self.prepare_button, self.cancel_button, self.compile_button,
                         self.stop_experimental_button, self.open_profile_button, self.play_button,
                         self.source_entry, self.work_entry, self.jobs_spin, self.save_button,
                         self.doctor_button, self.clear_button, self.export_button,
-                        self.copy_button, self.restore_graphics_button]
-        self._readonly_widgets = [self.build_combo, self.shader_combo]
+                        self.copy_button, self.restore_graphics_button, self.build_start_button]
+        self._readonly_widgets = [self.build_combo, self.shader_combo, self.output_combo]
 
     # -------------------------------------------------------------- play tab
     def _build_play_tab(self):
         hero = self._card(self.play_tab, fill='x')
+        art = tk.Canvas(hero, width=104, height=132, bg=CARD, highlightthickness=0)
+        art.pack(side='left', padx=(16, 0), pady=12)
+        for radius, color in [(43, LINE), (32, '#3d5936'), (21, ACCENT)]:
+            art.create_oval(52-radius, 66-radius, 52+radius, 66+radius, outline=color, width=2)
+        art.create_line(52, 10, 52, 38, fill=ACCENT, width=3)
+        art.create_line(52, 94, 52, 122, fill=ACCENT, width=3)
         hero_left = tk.Frame(hero, bg=CARD)
         hero_left.pack(side='left', fill='both', expand=True, padx=20, pady=17)
         self._caps(hero_left, 'Xbox 360 · Port nativo experimental').pack(anchor='w')
-        tk.Label(hero_left, text='Green Lantern: Rise of the Manhunters', bg=CARD, fg=INK,
-                 font=(FONT, 18, 'bold')).pack(anchor='w', pady=(5, 2))
-        tk.Label(hero_left, text='Escolha o alvo, selecione o dump e abra a sessão. '
-                  'A configuração gráfica é aplicada por CVars e não toca no save do jogo.',
-                 bg=CARD, fg=MUTED, font=(FONT, 9), wraplength=640,
+        tk.Label(hero_left, text='GREEN LANTERN', bg=CARD, fg=INK,
+                 font=(FONT, 25, 'bold')).pack(anchor='w', pady=(5, 0))
+        tk.Label(hero_left, text='RISE OF THE MANHUNTERS', bg=CARD, fg=MUTED,
+                 font=(FONT, 10, 'bold')).pack(anchor='w', pady=(0, 8))
+        tk.Label(hero_left, text='Transforme seu dump em uma versão local para PC.\n'
+                  'Depois, escolha como jogar.',
+                 bg=CARD, fg=MUTED, font=(FONT, 10), wraplength=430,
                  justify='left').pack(anchor='w')
         hero_right = tk.Frame(hero, bg=CARD)
         hero_right.pack(side='right', padx=20, pady=16)
@@ -331,20 +380,23 @@ class Launcher:
         self.cancel_button = ttk.Button(actions, text='Cancelar tarefa', style='Ghost.TButton',
                                         state='disabled', command=self.stop_experimental)
         self.cancel_button.pack(side='right', padx=(0, 6))
-        self.progress = ttk.Progressbar(source_card, mode='determinate', value=0)
-        self.progress.pack(fill='x', padx=16, pady=(0, 12))
+        track = tk.Frame(source_card, bg=CARD)
+        track.pack(fill='x', padx=16, pady=(0, 10))
+        tk.Label(track, textvariable=self.build_count, bg=CARD, fg=MUTED, font=(FONT, 9)).pack(side='left')
+        ttk.Button(track, text='Ver geração  →', style='Ghost.TButton',
+                   command=lambda: self.tabs.select(self.build_tab)).pack(side='right')
 
         notes = tk.Frame(self.play_tab, bg=BG)
         notes.pack(fill='x', pady=(10, 0))
         notes_data = (
-            ('Saves separados',
-             'Cada alvo usa seu próprio perfil em .aster/runtime. O launcher só grava preferências '
-             'locais e nunca edita o save do jogo.'),
+            ('Seu progresso, em qualquer modo',
+             '30, 60 e ilimitado compartilham o save deste usuário. Trocar FPS ou qualidade '
+             'não cria outra campanha.'),
             ('Validação antes de abrir',
              'O launcher confere dump, build, plugin e referência FSI com --validar antes de abrir '
              'a sessão.'),
             ('Experimental é opt-in',
-             '30 fps é o padrão. 60 e ilimitado pedem confirmação e usam builds e perfis isolados.'),
+             '30 fps é o padrão. 60 e ilimitado pedem confirmação. O save continua o mesmo.'),
         )
         for index, (title, body) in enumerate(notes_data):
             notes.columnconfigure(index, weight=1, uniform='note')
@@ -356,6 +408,108 @@ class Launcher:
             tk.Label(card, text=body, bg=CARD_ALT, fg=MUTED, font=(FONT, 8), anchor='w',
                      justify='left', wraplength=280).pack(fill='x', padx=10, pady=(0, 9))
 
+    def _build_generation_tab(self):
+        tk.Label(self.build_tab, text='Do seu dump ao PC', bg=BG, fg=INK,
+                 font=(FONT, 22, 'bold')).pack(anchor='w')
+        tk.Label(self.build_tab, text='Acompanhe cada etapa. Você pode sair desta aba sem interromper a geração.',
+                 bg=BG, fg=MUTED, font=(FONT, 10)).pack(anchor='w', pady=(4, 10))
+        columns = tk.Frame(self.build_tab, bg=BG)
+        columns.pack(fill='both', expand=True)
+        left = tk.Frame(columns, bg=BG)
+        left.pack(side='left', fill='both', expand=True)
+        side = tk.Frame(columns, bg=PANEL, width=245, padx=20, pady=20)
+        side.pack(side='right', fill='y', padx=(16, 0))
+        side.pack_propagate(False)
+        self._caps(side, 'Durante a geração', PANEL).pack(anchor='w')
+        tk.Label(side, text='Tudo acontece\nno seu PC.', bg=PANEL, fg=INK,
+                 font=(FONT, 17, 'bold'), justify='left').pack(anchor='w', pady=(12, 16))
+        for title, body in [('Seu dump é preservado', 'Os arquivos originais são apenas lidos.'),
+                            ('Continue depois', 'Se cancelar, o que já foi compilado fica disponível para retomar.'),
+                            ('Progresso da etapa', 'Downloads mostram MB transferidos. Compilações mostram tarefas concluídas.')]:
+            tk.Label(side, text=title, bg=PANEL, fg=ACCENT, font=(FONT, 9, 'bold')).pack(anchor='w', pady=(12, 4))
+            tk.Label(side, text=body, bg=PANEL, fg=MUTED, font=(FONT, 9), wraplength=205,
+                     justify='left').pack(anchor='w')
+        card = self._card(left, fill='x')
+        head = tk.Frame(card, bg=CARD)
+        head.pack(fill='x', padx=18, pady=(12, 6))
+        tk.Label(head, textvariable=self.build_count, bg=CARD, fg=ACCENT,
+                 font=(FONT, 9, 'bold')).pack(side='left')
+        tk.Label(head, textvariable=self.build_elapsed, bg=CARD, fg=MUTED,
+                 font=(MONO, 10)).pack(side='right')
+        tk.Label(card, textvariable=self.build_heading, bg=CARD, fg=INK,
+                 font=(FONT, 15, 'bold'), anchor='w', wraplength=650).pack(fill='x', padx=18)
+        tk.Label(card, textvariable=self.build_detail, bg=CARD, fg=MUTED,
+                 font=(FONT, 9), wraplength=650, anchor='w', justify='left').pack(fill='x', padx=18, pady=(8, 12))
+        self.progress = ttk.Progressbar(card, mode='determinate', value=0)
+        self.progress.pack(fill='x', padx=18)
+        tk.Label(card, textvariable=self.build_measure, bg=CARD, fg=MUTED,
+                 font=(FONT, 9), anchor='w').pack(fill='x', padx=18, pady=(8, 16))
+        steps = self._card(left, fill='x', pady=(12, 0))
+        self.stage_widgets = {}
+        for index, (key, title, detail) in enumerate(BUILD_STAGES):
+            row = tk.Frame(steps, bg=CARD)
+            row.pack(fill='x', padx=16, pady=3)
+            number = tk.Label(row, text=f'{index+1:02}', bg=CARD_ALT, fg=MUTED,
+                              font=(MONO, 10, 'bold'), padx=8, pady=4)
+            number.pack(side='left', padx=(0, 12))
+            label = tk.Label(row, text=title, bg=CARD, fg=MUTED, font=(FONT, 10), anchor='w')
+            label.pack(side='left')
+            state = tk.Label(row, text='Aguardando', bg=CARD, fg=MUTED, font=(FONT, 9))
+            state.pack(side='right')
+            self.stage_widgets[key] = (number, label, state)
+        actions = tk.Frame(left, bg=BG)
+        actions.pack(side='bottom', fill='x', pady=(10, 0), before=card)
+        self.build_start_button = ttk.Button(actions, text='Gerar port', style='Secondary.TButton', command=self.generate_native)
+        self.build_start_button.pack(side='left')
+        self.build_cancel_button = ttk.Button(actions, text='Cancelar geração', style='Ghost.TButton', state='disabled', command=self.stop_experimental)
+        self.build_cancel_button.pack(side='left', padx=8)
+        ttk.Button(actions, text='Ver logs', style='Ghost.TButton', command=lambda: self.tabs.select(self.diag_tab)).pack(side='right')
+
+    def _paint_build_steps(self):
+        for key, widgets in self.stage_widgets.items():
+            state = self.stage_states[key]
+            color = ACCENT if state in ('running', 'completed') else DANGER if state == 'failed' else WARN if state == 'cancelled' else MUTED
+            number, label, badge = widgets
+            number.configure(fg=color, bg=ACCENT_DARK if state == 'running' else CARD_ALT)
+            label.configure(fg=INK if state in ('running', 'completed') else MUTED)
+            badge.configure(fg=color, text={'pending': 'Aguardando', 'running': 'Em andamento',
+                            'completed': 'Concluída', 'failed': 'Falhou', 'cancelled': 'Cancelada'}[state])
+        self.build_count.set(f"{sum(state == 'completed' for state in self.stage_states.values())} de 6 etapas concluídas")
+
+    def _build_event(self, event):
+        if event.get('task') == 'Port já compilado':
+            self.build_reused = True
+        key = event.get('stage')
+        if key not in self.stage_states or not self.build_running:
+            return
+        state = event.get('state', 'running')
+        self.stage_states[key] = state
+        if state == 'running':
+            if self.active_stage != key:
+                self.active_stage = key
+                self.progress.stop()
+                self.progress.configure(mode='indeterminate', value=0)
+                self.progress.start(18)
+                self.build_measure.set('Em andamento · duração ainda não estimada')
+            self.build_heading.set(next(title for stage, title, _ in BUILD_STAGES if stage == key))
+            self.build_detail.set(event.get('message') or next(detail for stage, _, detail in BUILD_STAGES if stage == key))
+            completed, total = event.get('completed', 0), event.get('total', 0)
+            if total > 0:
+                self.progress.stop()
+                self.progress.configure(mode='determinate', value=min(100, completed / total * 100))
+            if event.get('unit') == 'bytes':
+                amount = f'{completed / 1048576:.1f} MB'
+                if total > 0:
+                    amount += f' de {total / 1048576:.1f} MB'
+                self.build_measure.set('Download · ' + amount)
+            elif event.get('unit') == 'targets' and total > 0:
+                self.build_measure.set(f'Compilação · {completed} de {total} tarefas ({min(100, completed*100//total)}% desta etapa)')
+        elif state == 'completed':
+            self.progress.stop()
+            self.progress.configure(mode='determinate', value=100)
+            self.build_measure.set('Etapa concluída')
+        self._paint_build_steps()
+
     # ---------------------------------------------------------- graphics tab
     def _build_graphics_tab(self):
         top = tk.Frame(self.graphics_tab, bg=BG)
@@ -365,8 +519,8 @@ class Launcher:
         self.restore_graphics_button = ttk.Button(top, text='Restaurar padrão', style='Ghost.TButton',
                                                   command=self.restore_graphics)
         self.restore_graphics_button.pack(side='right')
-        tk.Label(self.graphics_tab, text='Presets alteram resolução interna, MSAA, filtragem e memória '
-                  'de texturas. O alvo de FPS é aplicado à sessão; 60 e ilimitado são experimentais.',
+        tk.Label(self.graphics_tab, text='Ajuste resolução, filtragem e cache de texturas. '
+                  '60 fps e ilimitado são experimentais.',
                  bg=BG, fg=MUTED, font=(FONT, 9), wraplength=1050,
                  justify='left').pack(anchor='w', pady=(4, 10))
         preset_frame = tk.Frame(self.graphics_tab, bg=BG)
@@ -374,8 +528,8 @@ class Launcher:
         preset_text = {
             'low': 'BAIXA\n720p · leve',
             'default': 'PADRÃO\n720p · equilíbrio',
-            'high': 'ALTA\n1440p · nítido',
-            'ultra': 'ULTRA\n2160p · máximo',
+            'high': 'ALTA\nfiltragem 8x',
+            'ultra': 'ULTRA\nfiltragem 16x',
             'custom': 'PERSONALIZADA\najuste fino',
         }
         for index, name in enumerate(graphics.PRESETS):
@@ -405,10 +559,20 @@ class Launcher:
         self.target_note = tk.Label(self.graphics_tab, text='', bg=BG, fg=MUTED,
                                     font=(FONT, 9), wraplength=1050, justify='left')
         self.target_note.pack(anchor='w', pady=(7, 0))
+        tk.Label(self.graphics_tab, text='Compatibilidade: escala interna 1x em todos os presets. 2x/3x causaram áreas pretas; a resolução da janela pode ser Full HD ou maior.',
+                 bg=BG, fg=MUTED, font=(FONT, 8), wraplength=1030, justify='left').pack(anchor='w', pady=(4, 0))
         options = self._card(self.graphics_tab, fill='x', pady=(12, 0))
         options_left = tk.Frame(options, bg=CARD)
         options_left.pack(side='left', fill='both', expand=True, padx=16, pady=13)
         self._caps(options_left, 'Sessão').pack(anchor='w')
+        display_row = tk.Frame(options_left, bg=CARD)
+        display_row.pack(fill='x', pady=(8, 0))
+        tk.Label(display_row, text='Resolução da janela', bg=CARD, fg=MUTED, font=(FONT, 9)).pack(side='left')
+        self.output_combo = ttk.Combobox(display_row, textvariable=self.output_resolution,
+                                        values=['Automática', *graphics.OUTPUT_RESOLUTIONS[1:]], state='readonly', width=15)
+        self.output_combo.pack(side='left', padx=8)
+        tk.Label(options_left, text='1920x1080 = Full HD. A escala interna é independente.',
+                 bg=CARD, fg=MUTED, font=(FONT, 8)).pack(anchor='w', pady=(5, 0))
         self.vsync_check = ttk.Checkbutton(options_left, text='VSync', variable=self.vsync)
         self.vsync_check.pack(anchor='w', pady=(8, 0))
         shader_row = tk.Frame(options_left, bg=CARD)
@@ -418,15 +582,15 @@ class Launcher:
         self.shader_combo = ttk.Combobox(shader_row, textvariable=self.shader_mode,
                                          values=graphics.SHADER_MODES, state='readonly', width=10)
         self.shader_combo.pack(side='left', padx=(8, 0))
-        tk.Label(options_left, text='async evita travar na compilação; blocking espera o shader. '
-                  'O cache de shaders é preservado.', bg=CARD, fg=MUTED, font=(FONT, 8),
+        tk.Label(options_left, text='async compila novos shaders em segundo plano; ainda pode haver engasgos. '
+                  'Os conhecidos são preparados antes de entrar; o cache é preservado.', bg=CARD, fg=MUTED, font=(FONT, 8),
                  wraplength=390, justify='left').pack(anchor='w', pady=(9, 0))
         options_right = tk.Frame(options, bg=CARD)
         options_right.pack(side='right', fill='both', expand=True, padx=16, pady=13)
         self._caps(options_right, 'Ajustes personalizados').pack(anchor='w')
         self.custom_grid = tk.Frame(options_right, bg=CARD)
         self.custom_grid.pack(fill='x', pady=(8, 0))
-        tk.Label(self.custom_grid, text='Resolução interna', bg=CARD, fg=MUTED,
+        tk.Label(self.custom_grid, text='Escala interna (1x)', bg=CARD, fg=MUTED,
                  font=(FONT, 9)).grid(row=0, column=0, sticky='w', pady=3)
         self.render_scale_spin = ttk.Spinbox(self.custom_grid, from_=1, to=3, width=4,
                                              textvariable=self.custom_render_scale)
@@ -514,7 +678,7 @@ class Launcher:
                          'assets extraídos do jogo. O inventário é local e não modifica o dump.\n\n'
                          'Para jogar, o host local e a referência FSI precisam existir; o launcher '
                          'executa --validar antes de abrir a sessão. O modo 30 fps usa o perfil '
-                         'principal. Os modos 60 fps e ilimitado usam perfis isolados.')
+                         'principal. Todos os modos compartilham o save deste usuário.')
         self.requirements = tk.Frame(self.game_tab, bg=CARD_ALT, highlightthickness=1,
                                      highlightbackground='#3a4f57')
         self.requirements.pack(fill='x', pady=(10, 0))
@@ -575,7 +739,8 @@ class Launcher:
             self.fps_target.set(data['fps_target'])
             self.vsync.set(data['vsync'])
             self.shader_mode.set(data['shader_mode'])
-            self.custom_render_scale.set(data['render_scale'])
+            self.output_resolution.set('Automática' if data['output_resolution'] == 'auto' else data['output_resolution'])
+            self.custom_render_scale.set(1)
             self.custom_msaa.set(data['msaa_2x'])
             self.custom_aniso.set(ANISO_LABELS.get(data['anisotropic'], ANISO_LABELS[3]))
             self.custom_texture.set(graphics.TEXTURE_QUALITY_LABELS.get(
@@ -590,11 +755,12 @@ class Launcher:
         target = self.fps_target.get()
         preset = self.graphics_preset.get()
         common = dict(fps_target=target, vsync=self.vsync.get(),
-                      shader_mode=self.shader_mode.get())
+                      shader_mode=self.shader_mode.get(),
+                      output_resolution='auto' if self.output_resolution.get() == 'Automática' else self.output_resolution.get())
         if preset == 'custom':
             return graphics.from_options(
                 'custom',
-                render_scale=self.custom_render_scale.get(),
+                render_scale=1,
                 msaa_2x=self.custom_msaa.get(),
                 anisotropic=ANISO_BY_LABEL.get(self.custom_aniso.get(), 3),
                 texture_quality=TEXTURE_BY_LABEL.get(self.custom_texture.get(), 'default'),
@@ -617,9 +783,9 @@ class Launcher:
             self.quick_graphics.set(
                 f"{graphics.PRESET_LABELS[preset]} · {graphics.internal_resolution(data['render_scale'])}")
             self.quick_profile.set({
-                '30': '30 fps · perfil principal',
-                '60': '60 fps · perfil isolado',
-                'unlimited': 'ilimitado · perfil isolado',
+                '30': 'Usuário do sistema · save compartilhado',
+                '60': 'Usuário do sistema · save compartilhado',
+                'unlimited': 'Usuário do sistema · save compartilhado',
             }[target])
         for name, button in self.preset_buttons.items():
             button.configure(style='PresetOn.TButton' if name == preset else 'Preset.TButton')
@@ -627,7 +793,7 @@ class Launcher:
             button.configure(style='PresetOn.TButton' if target_name == target else 'Preset.TButton')
         self.warning_frame.pack_forget()
         if target == '60':
-            self.warning_text.set('MODO 60 FPS EXPERIMENTAL · usa o port local e um perfil isolado. '
+            self.warning_text.set('MODO 60 FPS EXPERIMENTAL · usa o save compartilhado do usuário. '
                                   'O timestep foi medido, mas combate, física, animações, áudio e '
                                   'campanha completa ainda não estão certificados.')
             self.warning_frame.pack(fill='x', pady=(10, 0), before=self.source_card)
@@ -638,7 +804,7 @@ class Launcher:
             self.warning_frame.pack(fill='x', pady=(10, 0), before=self.source_card)
         note = graphics.TARGET_DESCRIPTIONS[target]
         if target == 'unlimited':
-            note += ' VSync fica desligado e o perfil é separado.'
+            note += ' VSync fica desligado. O save pertence ao usuário.'
         self.target_note.configure(text=note, fg=WARN if target != '30' else MUTED)
         self._refresh_custom_state()
         self._refresh_engine_status()
@@ -649,6 +815,7 @@ class Launcher:
                        self.texture_combo, self.dither_check):
             widget.configure(state=state)
         self.msaa_check.configure(state='disabled')
+        self.render_scale_spin.configure(state='disabled')
         if not self.busy:
             self.aniso_combo.configure(state='readonly')
             self.texture_combo.configure(state='readonly')
@@ -772,6 +939,7 @@ class Launcher:
         self.play_button.configure(state='normal' if self._source_ready() else 'disabled',
                                    text='JOGAR AGORA' if ready else 'GERAR PORT NATIVO')
         self.compile_button.configure(state='normal' if self._source_ready() else 'disabled')
+        self.build_start_button.configure(state='normal' if self._source_ready() else 'disabled')
 
     def _idle_status(self):
         if not self.source.get():
@@ -797,6 +965,7 @@ class Launcher:
             widget.configure(state='readonly' if enabled else 'disabled')
         self.compile_button.configure(state='normal' if enabled and self._source_ready() else 'disabled')
         self.cancel_button.configure(state='disabled' if enabled else 'normal')
+        self.build_cancel_button.configure(state='normal' if not enabled and self.build_running else 'disabled')
         self.stop_experimental_button.configure(
             state='normal' if (not enabled and self.experimental_process is not None) else 'disabled')
         self._refresh_custom_state()
@@ -878,14 +1047,14 @@ class Launcher:
             text = ('O modo 60 fps é experimental.\n\n'
                     'O passo de simulação foi medido em par com 30 fps, mas combate, física, '
                     'animações, áudio e campanha completa não estão certificados.\n\n'
-                    'Usa o port local e um perfil isolado; não altera o save de 30 fps.\n\n'
+                    'Usa o mesmo save deste usuário em todos os alvos de FPS.\n\n'
                     'Deseja abrir mesmo assim?')
         else:
             title = 'FPS ilimitado experimental'
             text = ('O modo ilimitado é experimental e remove a espera de pacing do motor.\n\n'
                     'Ele desliga o VSync, usa apresentação imediata e pode causar tearing, alto '
                     'consumo de GPU e velocidade de simulação incorreta.\n\n'
-                    'Usa um perfil isolado; não altera o save de 30 fps.\n\n'
+                    'Usa o mesmo save deste usuário em todos os alvos de FPS.\n\n'
                     'Deseja abrir mesmo assim?')
         return messagebox.askyesno(title, text)
 
@@ -896,6 +1065,7 @@ class Launcher:
                    '--shader-mode', data['shader_mode'],
                    '--vsync', 'on' if data['vsync'] else 'off',
                    '--fps-target', data['fps_target'],
+                   '--output-resolution', data['output_resolution'],
                    '--graphics-preset', data['preset']]
         if data['preset'] == 'custom':
             command += ['--render-scale', str(data['render_scale']),
@@ -1043,6 +1213,16 @@ class Launcher:
         if self.busy:
             return False
         self.busy = True
+        self.build_running = kind == 'Gerar port'
+        if self.build_running:
+            self.stage_states = {key: 'pending' for key, *_ in BUILD_STAGES}
+            self.active_stage = None
+            self.build_reused = False
+            self.build_heading.set('Preparando sua versão para PC')
+            self.build_detail.set('Conferindo o dump e o ambiente local…')
+            self.build_measure.set('Aguardando a primeira etapa')
+            self.build_elapsed.set('00:00')
+            self._paint_build_steps()
         self.cancel = Cancellation()
         self._set_busy_controls(False)
         self.progress.configure(mode='indeterminate')
@@ -1102,7 +1282,7 @@ class Launcher:
         self.start(lambda: build_native(source, Workspace(PROJECT / '.aster', PROJECT),
                     self.cancel, emit=lambda e: self.queue.put(('event', '', e)),
                     jobs=jobs, allow_download=True), 'Gerar port')
-        self.tabs.select(self.diag_tab)
+        self.tabs.select(self.build_tab)
 
     def doctor(self):
         self.start(lambda: diagnostics(self.cancel), 'Diagnóstico')
@@ -1175,11 +1355,30 @@ class Launcher:
                 break
             if state == 'event':
                 self.log(value)
-                self.status.set(value.get('message') or f"{value.get('task')} • {value.get('state')}")
+                self._build_event(value)
+                self.status.set(value.get('message') or value.get('task') or self.build_heading.get())
                 continue
             self.busy = False
             self.progress.stop()
-            self.progress.configure(mode='determinate', value=0)
+            if kind == 'Gerar port':
+                self.build_running = False
+                if state == 'error':
+                    cancelled = value.get('code') == 'CANCELLED'
+                    if self.active_stage:
+                        self.stage_states[self.active_stage] = 'cancelled' if cancelled else 'failed'
+                    self.build_heading.set('Geração cancelada' if cancelled else 'Não foi possível concluir')
+                    self.build_detail.set(value['message'])
+                    self.build_measure.set('Você pode retomar a geração. Os arquivos já compilados foram mantidos.')
+                    self.progress.configure(mode='determinate')
+                else:
+                    self.stage_states = {key: 'completed' for key, *_ in BUILD_STAGES}
+                    self.build_heading.set('Seu port está pronto')
+                    self.build_detail.set('Volte à Biblioteca e clique em Jogar agora para testar a inicialização.')
+                    self.build_measure.set('Build reutilizado · nenhuma recompilação' if self.build_reused else 'Geração concluída · arquivos verificados')
+                    self.progress.configure(mode='determinate', value=100)
+                self._paint_build_steps()
+            else:
+                self.progress.configure(mode='determinate', value=0)
             self._set_busy_controls(True)
             self._refresh_engine_status()
             self.last_result = value
@@ -1213,7 +1412,7 @@ class Launcher:
                 self.status.set('Port gerado localmente • pronto para testar a inicialização')
                 self.set_summary(value.get('message', '') + '\n' + str(value.get('binary', '')))
                 self._refresh_engine_status()
-                self.tabs.select(self.play_tab)
+                self.tabs.select(self.build_tab)
             elif kind.startswith('Jogar'):
                 target = value.get('fps_target', self.fps_target.get())
                 if target == '60':
@@ -1230,6 +1429,9 @@ class Launcher:
                 if kind == 'Preparar':
                     self.tabs.select(self.game_tab)
         self._refresh_play_state()
+        if self.build_running:
+            elapsed = int(time.monotonic() - self.task_started)
+            self.build_elapsed.set(f'{elapsed//60:02}:{elapsed%60:02}')
         self.after_id = self.root.after(50, self.poll)
 
 

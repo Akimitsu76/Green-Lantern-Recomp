@@ -25,10 +25,10 @@ MAIN_REPORT = '.aster/reports/rexglue-runtime-probe.json'
 MAIN_RUNTIME = '.aster/runtime/green-lantern'
 EXPERIMENTAL_60_BINARY = '.aster/build/rex-fps-validation-v9/aster_green_lantern'
 EXPERIMENTAL_60_REPORT = '.aster/reports/rexglue-runtime-probe-60fps.json'
-EXPERIMENTAL_60_RUNTIME = '.aster/runtime/green-lantern-60fps'
+EXPERIMENTAL_60_RUNTIME = MAIN_RUNTIME
 EXPERIMENTAL_UNLIMITED_BINARY = '.aster/build/rex-fps-unlimited-v10/aster_green_lantern'
 EXPERIMENTAL_UNLIMITED_REPORT = '.aster/reports/rexglue-runtime-probe-unlimited.json'
-EXPERIMENTAL_UNLIMITED_RUNTIME = '.aster/runtime/green-lantern-unlimited'
+EXPERIMENTAL_UNLIMITED_RUNTIME = MAIN_RUNTIME
 
 
 def digest(path):
@@ -64,8 +64,10 @@ def parse_arguments(argv=None):
                         help='Atalho antigo para --fps-target 60.')
     parser.add_argument('--graphics-preset', choices=graphics.PRESETS, default='default',
                         help='Preset gráfico. Padrão: default (mesmos valores do build principal).')
+    parser.add_argument('--output-resolution', choices=graphics.OUTPUT_RESOLUTIONS, default='auto',
+                        help='Tamanho da janela, incluindo 1920x1080; independente da escala interna.')
     parser.add_argument('--render-scale', type=int, choices=(1, 2, 3),
-                        help='Resolução interna: 1x (720p), 2x (1440p) ou 3x (2160p). Implica preset custom.')
+                        help='Escala interna: compatibilidade força 1x neste jogo. Use --output-resolution para a janela.')
     parser.add_argument('--msaa', choices=('on', 'off'),
                         help='Compatibilidade: FSI mantém o MSAA do jogo; off não é suportado.')
     parser.add_argument('--anisotropic', type=int, choices=tuple(graphics.ANISOTROPIC_LABELS),
@@ -99,7 +101,7 @@ def resolve_graphics(parser, args, target):
         parser.error('O backend FSI preserva o MSAA do jogo; não oferece desligamento de MSAA.')
     vsync_on = args.vsync != 'off' 
     try:
-        return graphics.from_options(
+        data = graphics.from_options(
             args.graphics_preset,
             render_scale=args.render_scale,
             msaa_2x=None if args.msaa is None else args.msaa == 'on',
@@ -109,7 +111,12 @@ def resolve_graphics(parser, args, target):
             fps_target=target,
             vsync=vsync_on,
             shader_mode=args.shader_mode,
+            output_resolution=args.output_resolution,
         )
+        if data['render_scale'] > 1:
+            print('Compatibilidade: escala interna 2x/3x causa áreas pretas neste jogo; usando 1x. A resolução da janela continua independente.', file=sys.stderr)
+            data['render_scale'] = 1
+        return data
     except Exception as exc:  # PortError and malformed command-line combinations
         parser.error(str(exc))
 
@@ -271,13 +278,13 @@ def main():
         command.append('--d3d12_allow_variable_refresh_rate_and_tearing=' + str(not graphics_data['vsync']).lower())
 
     if target == '60':
-        print('MODO 60 FPS EXPERIMENTAL: usa o port local e um perfil isolado; não altera o save de 30 fps.', flush=True)
+        print('MODO 60 FPS EXPERIMENTAL: usa o port local e o save compartilhado deste usuário.', flush=True)
         print('O passo de simulação foi medido em par com 30 fps, mas combate, física, animações, áudio e campanha não estão certificados.', flush=True)
-        print(f'Perfil 60 fps: {run / "user"}', flush=True)
+        print(f'Perfil compartilhado: {run / "user"}', flush=True)
     elif target == 'unlimited':
         print('MODO ILIMITADO EXPERIMENTAL: remove a espera de pacing, desliga VSync e usa apresentação imediata.', flush=True)
         print('Pode consumir muito mais GPU, apresentar tearing e não garante velocidade correta da simulação.', flush=True)
-        print(f'Perfil ilimitado isolado: {run / "user"}', flush=True)
+        print(f'Perfil compartilhado: {run / "user"}', flush=True)
         print('Se o jogo parecer acelerado ou instável, volte para 30 fps.', flush=True)
     print('Compilação experimental local; campanha completa e qualidade do áudio ainda sem validação.', flush=True)
     print(f'Gráficos: {graphics.summary(graphics_data)}', flush=True)

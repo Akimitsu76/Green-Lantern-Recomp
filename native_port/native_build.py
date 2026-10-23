@@ -81,9 +81,12 @@ def ensure_sdk(work, cancel, emit, allow_download=False):
         fd, temporary = tempfile.mkstemp(dir=archive.parent, prefix='.download-')
         try:
             with os.fdopen(fd, 'wb') as output, urllib.request.urlopen(url, timeout=30) as response:
+                total = int(response.headers.get('Content-Length', 0))
                 while block := response.read(1024 * 1024):
                     cancel.check()
                     output.write(block)
+                    emit({'task': 'Baixar SDK oficial', 'stage': 'tools', 'state': 'running',
+                          'completed': output.tell(), 'total': total, 'unit': 'bytes'})
                     if output.tell() > 512 * 1024**2:
                         raise PortError('SDK_DOWNLOAD', 'Pacote maior que o esperado.')
             if file_hash(Path(temporary)) != SDK_ASSETS[target]:
@@ -215,8 +218,10 @@ def _build_native(source, workspace, cancel=None, emit=None, jobs=2, allow_downl
             return current
         except PortError:
             pass
+    emit({'stage': 'tools', 'state': 'running', 'message': 'Verificando ferramentas e SDK'})
     cmake, ninja, compiler, env = toolchain(root, workspace)
     prefix = ensure_sdk(workspace, cancel, emit, allow_download)
+    emit({'stage': 'tools', 'state': 'completed'})
     generator = prefix / 'bin' / ('rexglue.exe' if os.name == 'nt' else 'rexglue')
     project = workspace.path(f'native/{key}/project')
     build = workspace.path(f'native/{key}/build')
@@ -225,18 +230,27 @@ def _build_native(source, workspace, cancel=None, emit=None, jobs=2, allow_downl
     def run(name, command, timeout=7200):
         cancel.check()
         emit({'task': name, 'state': 'running', 'message': name})
+        stage = 'cache' if 'cache persistente' in name else 'compile' if name in ('Configurar build', 'Compilar port local') else 'codegen'
+        def output(line):
+            match = re.search(r'\[(\d+)/(\d+)\]', line)
+            if match:
+                emit({'stage': stage, 'state': 'running', 'message': line[:160],
+                      'completed': int(match[1]), 'total': int(match[2]), 'unit': 'targets'})
         try:
-            result = run_process(list(map(str, command)), root, cancel, timeout=timeout, env=env)
+            result = run_process(list(map(str, command)), root, cancel, timeout=timeout, env=env, on_output=output)
         except PortError as exc:
             workspace.write_json(f'native/{key}/logs/failure.json', exc.as_dict())
             raise
         (logs / (re.sub(r'[^a-zA-Z0-9]+', '-', name) + '.log')).write_text(result['stdout'] + result['stderr'])
         emit({'task': name, 'state': 'completed'})
     cache_plugin = None
+    emit({'stage': 'cache', 'state': 'running', 'message': 'Preparando cache gráfico'})
     if os.name != 'nt':
         from .native_cache import build_cache_plugin
         cache_plugin = build_cache_plugin(root, workspace, prefix, (cmake, ninja, compiler, env),
                                           cancel, emit, run, allow_download)
+    emit({'stage': 'cache', 'state': 'completed', 'message': 'Cache pronto' if cache_plugin else 'Etapa dispensada nesta plataforma'})
+    emit({'stage': 'codegen', 'state': 'running', 'message': 'Gerando o código nativo'})
     manifest = project / 'aster_green_lantern_manifest.toml'
     if not manifest.is_file():
         run('Criar projeto nativo', [generator, 'init', '--project-name', 'aster_green_lantern',
@@ -279,11 +293,15 @@ def _build_native(source, workspace, cancel=None, emit=None, jobs=2, allow_downl
         stamp.write_text(json.dumps({str(p.relative_to(project)): file_hash(p) for p in generated}))
     else:
         emit({'task': 'Reutilizar C++ já gerado', 'state': 'completed'})
+    emit({'stage': 'codegen', 'state': 'completed'})
+    emit({'stage': 'compile', 'state': 'running', 'message': 'Configurando a compilação'})
     run('Configurar build', [cmake, '-S', project, '-B', build, '-G', 'Ninja',
                              '-DCMAKE_BUILD_TYPE=RelWithDebInfo', f'-DCMAKE_PREFIX_PATH={prefix}',
                              f'-DCMAKE_CXX_COMPILER={compiler}', f'-DCMAKE_MAKE_PROGRAM={ninja}',
                              '-DCMAKE_FIND_USE_PACKAGE_REGISTRY=OFF', '-DCMAKE_FIND_USE_SYSTEM_PACKAGE_REGISTRY=OFF'])
     run('Compilar port local', [cmake, '--build', build, '--parallel', str(jobs)])
+    emit({'stage': 'compile', 'state': 'completed'})
+    emit({'stage': 'verify', 'state': 'running', 'message': 'Conferindo o executável e as bibliotecas'})
     suffix = '.exe' if os.name == 'nt' else ''
     binary = build / ('aster_green_lantern' + suffix)
     if not binary.is_file():
@@ -310,6 +328,7 @@ def _build_native(source, workspace, cancel=None, emit=None, jobs=2, allow_downl
             'renderer': 'd3d12-rov' if os.name == 'nt' else 'vulkan-fsi',
             'message': 'Port compilado localmente; execução e campanha ainda precisam de validação.'}
     workspace.write_json(INSTALL, data)
+    emit({'stage': 'verify', 'state': 'completed'})
     emit({'task': 'Port gerado', 'state': 'completed', 'message': data['message']})
     return data
 
@@ -317,6 +336,8 @@ def _build_native(source, workspace, cancel=None, emit=None, jobs=2, allow_downl
 def build_native(source, workspace, cancel=None, emit=None, jobs=2, allow_download=False):
     # Validate the input before creating even a lock in the workspace.
     cancel = cancel or Cancellation()
+    emit = emit or (lambda event: None)
+    emit({'stage': 'dump', 'state': 'running', 'message': 'Conferindo os arquivos do seu dump'})
     info = inspect_source(source, cancel)
     if not info.get('game_directory'):
         raise PortError('BUILD_DUMP', 'Selecione a pasta extraída com default.xex e os assets.')
@@ -325,6 +346,7 @@ def build_native(source, workspace, cancel=None, emit=None, jobs=2, allow_downlo
     game = Path(info['game_directory']).resolve()
     if workspace.root.is_relative_to(game) or game.is_relative_to(workspace.root):
         raise PortError('SOURCE_OVERLAP', 'O dump deve ficar fora do workspace.')
+    emit({'stage': 'dump', 'state': 'completed'})
     from .locking import lock_session
     lock = workspace.path('native/build.lock')
     lock.parent.mkdir(parents=True, exist_ok=True)

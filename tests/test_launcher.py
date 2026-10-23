@@ -126,11 +126,60 @@ class LauncherTests(unittest.TestCase):
             parent = button.master
             self.assertLessEqual(button.winfo_y() + button.winfo_height(), parent.winfo_height())
 
+    def test_generation_controls_fit_and_full_hd_reaches_play_command(self):
+        self.root.geometry('1088x720')
+        self.app.tabs.select(self.app.build_tab)
+        self.root.update()
+        bottom = self.app.build_tab.winfo_rooty() + self.app.build_tab.winfo_height()
+        for widget in [self.app.progress, self.app.build_start_button, self.app.build_cancel_button]:
+            self.assertTrue(widget.winfo_ismapped())
+            self.assertGreaterEqual(widget.winfo_height(), 5 if widget == self.app.progress else 24)
+            self.assertLessEqual(widget.winfo_rooty() + widget.winfo_height(), bottom)
+        self.app.output_resolution.set('1920x1080')
+        command = self.app.play_command('/tmp/synthetic-dump')
+        self.assertEqual(command[command.index('--output-resolution') + 1], '1920x1080')
+        self.app.choose_target('60')
+        self.assertIn('save compartilhado', self.app.quick_profile.get())
+
     def test_export_diagnostic_stays_in_workspace(self):
         self.app.export_report()
         path = Path(self.app.report_path.get())
         self.assertTrue(path.is_relative_to(self.project / '.aster/reports'))
         self.assertTrue(path.is_file())
+
+    def test_build_progress_uses_real_counts_and_preserves_cancelled_state(self):
+        def work():
+            while True:
+                self.app.cancel.check()
+                self.app.cancel.event.wait(.01)
+        self.app.start(work, 'Gerar port')
+        self.app.queue.put(('event', '', {'stage': 'dump', 'state': 'completed'}))
+        self.app.queue.put(('event', '', {'stage': 'compile', 'state': 'running',
+                                        'completed': 4, 'total': 10, 'unit': 'targets'}))
+        self.root.update()
+        time.sleep(.06)
+        self.root.update()
+        self.assertEqual(float(self.app.progress['value']), 40)
+        self.assertIn('4 de 10', self.app.build_measure.get())
+        self.assertEqual(self.app.build_count.get(), '1 de 6 etapas concluídas')
+        self.assertEqual(str(self.app.build_cancel_button['state']), 'normal')
+        self.app.build_cancel_button.invoke()
+        self.wait_task()
+        self.assertEqual(self.app.stage_states['compile'], 'cancelled')
+        self.assertEqual(self.app.build_heading.get(), 'Geração cancelada')
+        self.assertNotEqual(float(self.app.progress['value']), 100)
+
+    def test_build_without_total_indicates_activity_and_success_stays_visible(self):
+        self.app.build_running = True
+        self.app._build_event({'stage': 'codegen', 'state': 'running'})
+        self.assertEqual(str(self.app.progress['mode']), 'indeterminate')
+        self.assertNotIn('%', self.app.build_measure.get())
+        self.app.build_running = False
+        self.app.start(lambda: {'state': 'built', 'binary': 'synthetic'}, 'Gerar port')
+        self.wait_task()
+        self.assertEqual(float(self.app.progress['value']), 100)
+        self.assertEqual(self.app.build_count.get(), '6 de 6 etapas concluídas')
+        self.assertEqual(self.app.tabs.select(), str(self.app.build_tab))
 
     @patch('native_port.pipeline.diagnostics', return_value={'tools': {}})
     def test_prepare_folder_records_blocker(self, _):
@@ -270,7 +319,7 @@ class LauncherTests(unittest.TestCase):
     def test_graphics_controls_switch_preset_and_experimental_target(self):
         self.app.choose_preset('ultra')
         self.assertEqual(self.app.graphics_preset.get(), 'ultra')
-        self.assertIn('3840x2160', self.app.graphics_summary.get())
+        self.assertIn('1280x720', self.app.graphics_summary.get())
         self.assertEqual(self.app.preset_buttons['ultra']['style'], 'PresetOn.TButton')
         self.app.choose_target('unlimited')
         self.root.update()
@@ -303,7 +352,7 @@ class LauncherTests(unittest.TestCase):
         self.app.custom_texture.set('Alta')
         self.app.custom_dither.set(True)
         command = self.app.play_command(folder)
-        self.assertEqual(command[command.index('--render-scale') + 1], '2')
+        self.assertEqual(command[command.index('--render-scale') + 1], '1')
         self.assertNotIn('--msaa', command)
         self.assertEqual(str(self.app.msaa_check['state']), 'disabled')
         self.assertEqual(command[command.index('--anisotropic') + 1], '4')

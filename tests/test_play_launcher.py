@@ -88,7 +88,7 @@ class PlayLauncherTests(unittest.TestCase):
                 self.assertFalse((root / '.aster/runtime').exists())
                 execute.assert_not_called()
 
-    def test_experimental_60fps_uses_v9_build_and_isolated_profile(self):
+    def test_experimental_60fps_uses_v9_build_and_shared_user_profile(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
             game = root / 'dump'
@@ -131,6 +131,10 @@ class PlayLauncherTests(unittest.TestCase):
             self.assertIn('--render_target_path_vulkan=fsi', arguments)
             self.assertFalse((root / '.aster/runtime').exists())
             execute.assert_not_called()
+
+    def test_fps_modes_share_user_save_and_shader_cache(self):
+        roots = [launcher.mode_paths(target)[2] for target in ('30', '60', 'unlimited')]
+        self.assertEqual(roots, [launcher.MAIN_RUNTIME] * 3)
 
     def test_experimental_60fps_rejects_a_non_60fps_reference(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -257,7 +261,7 @@ class PlayLauncherTests(unittest.TestCase):
                     contextlib.redirect_stdout(output):
                 self.assertEqual(launcher.main(), 0)
             arguments = shlex.split(output.getvalue().splitlines()[-1])
-            self.assertIn('--resolution_scale=2', arguments)
+            self.assertIn('--resolution_scale=1', arguments)
             self.assertFalse(any(a.startswith('--native_2x_msaa=') for a in arguments))
             self.assertIn('--anisotropic_override=4', arguments)
             self.assertIn('--texture_cache_memory_limit_hard=1024', arguments)
@@ -290,7 +294,7 @@ class PlayLauncherTests(unittest.TestCase):
                     contextlib.redirect_stdout(output):
                 self.assertEqual(launcher.main(), 0)
             arguments = shlex.split(output.getvalue().splitlines()[-1])
-            self.assertIn('--resolution_scale=2', arguments)
+            self.assertIn('--resolution_scale=1', arguments)
             self.assertFalse(any(a.startswith('--native_2x_msaa=') for a in arguments))
             self.assertIn('--anisotropic_override=4', arguments)
             self.assertIn('--present_dither=true', arguments)

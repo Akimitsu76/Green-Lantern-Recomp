@@ -47,20 +47,23 @@ Os requisitos de Clang/C++23 e do dump continuam os mesmos.
    instalar Python nem rodar pip para usar o launcher.
 3. Selecione a pasta extraída que contém `default.xex` e os demais arquivos do
    jogo. ISO e XEX isolado não são suficientes para esta geração.
-4. Clique **GERAR PORT NATIVO**, ou abra **Jogo e arquivos → Gerar port nativo**.
+4. Clique **GERAR PORT NATIVO**, ou abra a página **Gerar port**.
 5. Confirme o download das ferramentas oficiais fixadas. Windows: SDK de cerca
    de 43 MB; Linux: SDK de 116 MB e até 55 MB de fontes públicas adicionais
    para reproduzir o patch de cache persistente. Os downloads são verificados
    por SHA-256. Nenhuma ferramenta é instalada globalmente.
-6. Acompanhe **Diagnóstico**. O launcher verifica o dump, gera C++ pelo ReXGlue,
+6. Acompanhe **Gerar port**. As seis etapas mostram downloads em bytes, compilação
+   em alvos Ninja e atividade indeterminada quando não existe um total conhecido.
+   O launcher verifica o dump, gera C++ pelo ReXGlue,
    configura CMake e compila. Não feche o launcher durante a geração; para
    interromper use **Cancelar tarefa**. Logs ficam em `app/.aster/native/`.
 7. Após **Port gerado**, clique **JOGAR AGORA**. Compilação concluída não é
    certificação de gameplay: inicialização, áudio e campanha devem ser testados.
 
-O dump é lido sem alterações. Saves e perfis ficam em `app/.aster/runtime/`,
-separados entre 30, 60 e ilimitado. O launcher grava somente suas preferências e
-os resultados do build; não copia progresso de um alvo para outro.
+O dump é lido sem alterações. Todos os alvos de FPS e configurações gráficas
+compartilham saves e cache em `.aster/runtime/green-lantern/` na pasta de dados
+do usuário do sistema. O perfil de 30 FPS já existente continua como principal.
+Pastas antigas de 60 FPS/ilimitado são preservadas, sem sobrescrever progresso.
 
 ## Compilação incremental
 
@@ -89,6 +92,16 @@ o caminho usa o presenter D3D12; comportamento visual ainda precisa de teste
 nativo. O MSAA é controlado pelo jogo/backend: o launcher não anuncia um falso
 botão para desligá-lo. “Cache de texturas” altera orçamento de memória, não a
 resolução dos arquivos de textura.
+
+A opção **Resolução da janela** inclui **1920x1080 (Full HD)**. Ela controla
+a saída; a renderização interna permanece em 1x (720p). Os testes reproduziram
+áreas pretas com escala interna 2x tanto em 30 quanto em 60 FPS. Por segurança,
+o launcher e o comando de jogo usam 1x, inclusive ao carregar preferências antigas.
+Isso contorna o defeito; a renderização interna em 2x/3x ainda precisa de correção.
+
+Shaders e pipelines já conhecidos são preparados na inicialização. Novos shaders
+compilam em segundo plano no modo `async`; o primeiro encontro ainda pode causar
+engasgos. O cache persistente é comum a todos os alvos de FPS.
 
 ## Pelo terminal
 

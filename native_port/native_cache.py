@@ -88,9 +88,12 @@ def build_cache_plugin(root, work, prefix, tools, cancel, emit, run, allow_downl
             fd, temporary = tempfile.mkstemp(dir=archive.parent)
             try:
                 with os.fdopen(fd, 'wb') as output, urllib.request.urlopen(url, timeout=30) as response:
+                    total = int(response.headers.get('Content-Length', 0))
                     while block := response.read(1024 * 1024):
                         cancel.check()
                         output.write(block)
+                        emit({'stage': 'cache', 'state': 'running', 'message': 'Baixando fontes do cache gráfico',
+                              'completed': output.tell(), 'total': total, 'unit': 'bytes'})
                         if output.tell() > 256 * 1024**2:
                             raise PortError('SDK_DOWNLOAD', 'Arquivo excedeu o tamanho previsto.')
                 if file_hash(Path(temporary)) != checksum:

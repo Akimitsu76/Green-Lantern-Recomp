@@ -192,6 +192,19 @@ class CoreTests(unittest.TestCase):
             [sys.executable, '-c', 'import time; time.sleep(30)'], self.project, cancel))
         self.assertLess(time.monotonic()-start, 3)
 
+    def test_process_reports_output_before_exit_and_remains_cancellable(self):
+        cancel = Cancellation()
+        seen = []
+        def output(line):
+            seen.append(line)
+            cancel.cancel()
+        start = time.monotonic()
+        self.assert_code('CANCELLED', lambda: run_process(
+            [sys.executable, '-c', 'import time; print("[1/12] compiling", flush=True); time.sleep(30)'],
+            self.project, cancel, on_output=output))
+        self.assertEqual(seen, ['[1/12] compiling'])
+        self.assertLess(time.monotonic() - start, 3)
+
     def test_process_timeout(self):
         self.assert_code('TIMEOUT', lambda: run_process(
             [sys.executable, '-c', 'import time; time.sleep(30)'], self.project, Cancellation(), timeout=.1))
