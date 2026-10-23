@@ -34,8 +34,8 @@ TARGET_DESCRIPTIONS = {
                   'apresentação imediata; a simulação mantém alvo 60.'),
 }
 SHADER_MODES = ('async', 'blocking')
-UPSCALERS = ('bilinear', 'cubic', 'sharp')
-UPSCALER_LABELS = {'bilinear': 'Bilinear', 'cubic': 'Bicúbico', 'sharp': 'Bicúbico + nitidez'}
+UPSCALERS = ('bilinear', 'cubic', 'sharp', 'fsr1')
+UPSCALER_LABELS = {'bilinear': 'Bilinear', 'cubic': 'Bicúbico', 'sharp': 'Bicúbico + nitidez', 'fsr1': 'FSR 1 EASU (experimental)'}
 OUTPUT_RESOLUTIONS = ('auto', '1280x720', '1920x1080', '2560x1440', '3840x2160')
 TEXTURE_QUALITIES = ('low', 'default', 'high', 'ultra')
 TEXTURE_QUALITY_LABELS = {

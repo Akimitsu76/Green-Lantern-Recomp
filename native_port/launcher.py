@@ -580,6 +580,8 @@ class Launcher:
         self.upscaler_combo = ttk.Combobox(upscale_row, textvariable=self.upscaler, values=[graphics.UPSCALER_LABELS[key] for key in (graphics.UPSCALERS if sys.platform == 'linux' else ('bilinear',))], state='readonly', width=20)
         self.upscaler_combo.pack(side='left', padx=8)
         self.upscaler_combo.bind('<<ComboboxSelected>>', lambda _: self._on_custom_changed())
+        tk.Label(options_left, text='FSR 1 EASU: saída 1080p/1440p; acima de 2x usa bilinear. Linux.',
+                 bg=CARD, fg=MUTED, font=(FONT, 8)).pack(anchor='w', pady=(4, 0))
         self.vsync_check = ttk.Checkbutton(options_left, text='VSync', variable=self.vsync)
         self.vsync_check.pack(anchor='w', pady=(4, 0))
         shader_row = tk.Frame(options_left, bg=CARD)

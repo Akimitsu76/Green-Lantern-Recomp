@@ -131,7 +131,7 @@ def build_cache_plugin(root, work, prefix, tools, cancel, emit, run, allow_downl
 
 
 def build_presenter_filter(root, work, prefix, tools, cancel, run):
-    """Build only original host presentation code against the exact Linux SDK."""
+    """Build the host presenter (original adapters plus MIT AMD EASU) for the pinned SDK."""
     from .native_build import file_hash
     source = root / 'integrations/rexglue/presenter-filter'
     recipe = hashlib.sha256(''.join(file_hash(p) for p in sorted(source.iterdir()) if p.is_file()).encode()).hexdigest()[:20]

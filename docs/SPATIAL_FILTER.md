@@ -38,3 +38,11 @@ little-endian uint32 words as `cubic_spirv` / `sharp_spirv` arrays.
 For the `_dither` variants add `-DASTER_DITHER=1`. All variants
 were checked with `spirv-val`; end-to-end verification still requires comparing
 actual game-window captures. Source and header hashes are part of the build key.
+
+## Experimental AMD EASU option
+
+`fsr1` now selects AMD's unmodified FSR 1 EASU edge-adaptive reconstruction through the original Vulkan presenter adapter. It is an EASU-only integration, not the complete EASU+RCAS pipeline: no separate RCAS sharpening pass is implemented. The existing `sharp` option remains the separate bounded cubic filter. No temporal history, synthesized motion vectors, neural model or frame generation is used.
+
+The source remains 720p. EASU is applied only for enlargement between 1x and 2x per axis (1080p/1440p for a 720p source); at 1:1, downscaling or above 2x it falls back to bilinear. Use explicit 1920x1080 output for initial testing. This bounds the filter to the intended scaling range; 4K chained EASU is not implemented. The entire final image, including HUD, is filtered.
+
+Upstream headers and MIT license are included verbatim, with pinned revision and hashes in FSR-SOURCE.json. Run `python3 scripts/generate_presenter_shaders.py` to regenerate and spirv-val-check all six variants. Selecting EASU requires integration recipe 6 and a regenerated local presenter; older installations must be updated first. Windows has no EASU adapter yet.

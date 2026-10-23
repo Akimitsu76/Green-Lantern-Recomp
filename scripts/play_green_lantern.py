@@ -250,6 +250,8 @@ def main():
     root = Path(__file__).resolve().parent.parent
     binary_rel, report_rel, runtime_rel = mode_paths(target)
     installation = read_install(root)
+    if graphics_data['upscaler'] == 'fsr1' and (not installation or installation.get('recipe', {}).get('integration', 0) < 6):
+        parser.error('FSR 1 EASU exige atualizar o port: use Gerar port/Atualizar port no launcher.')
     if installation:
         report = {'command': [f'--game_data_root={installation["game_root"]}']}
     else:

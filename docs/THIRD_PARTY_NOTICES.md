@@ -23,3 +23,7 @@ As licenças desses componentes permanecem nas respectivas árvores do SDK.
 Os nomes Green Lantern e Rise of the Manhunters identificam o jogo compatível;
 este launcher experimental não é uma distribuição do jogo nem uma versão
 oficial. É necessário fornecer os próprios arquivos do dump suportado.
+
+## AMD FidelityFX Super Resolution 1
+
+A reconstrução EASU usa `ffx_a.h` e `ffx_fsr1.h` originais da AMD, sob licença MIT, revisão `a21ffb8f6c13233ba336352bdff293894c706575` de https://github.com/GPUOpen-Effects/FidelityFX-FSR. A licença integral acompanha `integrations/rexglue/presenter-filter/FSR-LICENSE.txt`; origem e hashes constam em `FSR-SOURCE.json`. Os shaders SPIR-V EASU compilados derivam desses headers e do adaptador original do projeto. Não são shaders extraídos do jogo.

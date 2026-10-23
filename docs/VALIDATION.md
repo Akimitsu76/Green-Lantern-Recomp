@@ -1,3 +1,13 @@
+# Validação EASU experimental (posterior à preparação v0.1.2)
+
+- 177 testes passaram em Xvfb, sem falhas ou skips no ambiente local.
+- Seis variantes de shaders compiladas e verificadas por spirv-val; os dois novos shaders usam EASU da AMD com licença MIT.
+- Sessão isolada 075: 150,4 segundos em 1920x1080/30 FPS, EASU e dithering, movimento e combate no início da missão 1. Foram observadas 5.089 chamadas de apresentação, sem mensagens fatais ou destinos não registrados. O teste terminou por prazo, com código de saída do jogo 0; o wrapper mantém ready=false porque não certifica jogabilidade completa.
+- Foram inspecionadas capturas da janela do processo de teste. Nenhuma área preta semelhante à regressão de supersampling foi vista nessa amostra; isso não certifica todas as cenas.
+- XEX manteve SHA-256 3218a70a78f2d258cd236c204ddbca0cee21c197d6de463f68f6e504385852d1 antes/depois.
+- Não foi medido ganho comparativo de qualidade ou desempenho contra um trajeto idêntico com bilinear. 1440p e a queda para bilinear acima de 2x não tiveram teste de gameplay nesta etapa.
+- AppImage experimental abriu em perfil isolado; Windows não recebeu um backend EASU.
+
 # Validação da atualização v0.1.2
 
 - Regressão em display virtual: 176 testes, sem falhas e sem skips no ambiente local com artefatos de integração.

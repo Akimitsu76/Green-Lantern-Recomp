@@ -91,6 +91,10 @@ Builds, downloads, configurações e perfis ficam em `.aster` dentro dessa pasta
 Para usar outra pasta de dados, defina `ASTER_DATA_HOME`. A pasta temporária de
 extração do PyInstaller/AppImage não é usada para dados permanentes.
 
+## Novo upscaler EASU (código atual)
+
+A branch `main` agora oferece **FSR 1 EASU experimental no Linux**, para reconstrução espacial de bordas na saída 1080p/1440p, sem aumentar a resolução interna. Esta integração usa a etapa EASU da AMD, sem RCAS separado. Em escala 1:1, redução ou acima de 2x por eixo, usa bilinear. Exige atualizar o port para a integração 6. As releases anteriores não recebem esse recurso automaticamente; é necessário um launcher que contenha esta atualização. Veja [SPATIAL_FILTER.md](docs/SPATIAL_FILTER.md).
+
 ## Atualização gráfica experimental
 
 No Linux, pipelines Vulkan novos podem ser preparados em segundo plano. Pipelines com escrita de memória permanecem síncronos por correção; a retenção de quadro completo e o primeiro encontro com shaders ainda podem causar pausas. O cache conhecido é reutilizado e preparado antes da partida. Não há promessa de ausência total de engasgos.

@@ -24,7 +24,7 @@ from .workspace import Workspace
 
 XEX_SHA256 = '3218a70a78f2d258cd236c204ddbca0cee21c197d6de463f68f6e504385852d1'
 SDK_VERSION = '0.10.0'
-INTEGRATION_VERSION = 5
+INTEGRATION_VERSION = 6
 SDK_ASSETS = {
     'linux-amd64': '0388edb3f8fb1444f1b0ad5d440cb02d9690ac20a76b04fd6b7dcc19f59328a6',
     'win-amd64': 'ad4485da853fbe932e9f5dbb643f9b5fe85dc73775ebbad4df6879fe6df0c11b',
@@ -229,7 +229,7 @@ def _build_native(source, workspace, cancel=None, emit=None, jobs=2, allow_downl
         host_fields = ('sdk', 'platform', 'xex', 'hints', 'hook')
         candidate = root / current['binary']
         if (all(previous.get(key) == recipe[key] for key in host_fields)
-                and previous.get('integration') in (4, 5)
+                and previous.get('integration') in (4, 5, 6)
                 and candidate.is_file()
                 and current.get('files', {}).get(current['binary']) == file_hash(candidate)):
             reusable_host = candidate

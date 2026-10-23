@@ -10,6 +10,8 @@
 #include "sharp_spirv.h"
 #include "cubic_dither_spirv.h"
 #include "sharp_dither_spirv.h"
+#include "fsr_easu_spirv.h"
+#include "fsr_easu_dither_spirv.h"
 namespace rex::ui::vulkan {
 VkPipeline VulkanPresenter::CreateGuestOutputPaintPipeline(GuestOutputPaintEffect effect,
                                                          VkRenderPass render_pass) {
@@ -21,15 +23,20 @@ VkPipeline VulkanPresenter::CreateGuestOutputPaintPipeline(GuestOutputPaintEffec
   const char* filter=std::getenv("ASTER_PRESENT_FILTER");
   bool cubic=filter && std::strcmp(filter,"cubic")==0;
   bool sharp=filter && std::strcmp(filter,"sharp")==0;
+  bool fsr=filter && std::strcmp(filter,"fsr1")==0;
   bool final_pass=render_pass==paint_context_.swapchain_render_pass;
   VkShaderModule custom=VK_NULL_HANDLE;
   VkShaderModule previous=guest_output_paint_fs_[size_t(effect)];
   const auto& dfn=vulkan_device_->functions(); const auto device=vulkan_device_->device();
-  if(final_pass && (effect==GuestOutputPaintEffect::kBilinear || effect==GuestOutputPaintEffect::kBilinearDither) && (cubic||sharp)) {
+  if(final_pass && (effect==GuestOutputPaintEffect::kBilinear || effect==GuestOutputPaintEffect::kBilinearDither) && (cubic||sharp||fsr)) {
     VkShaderModuleCreateInfo info{}; info.sType=VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
     bool dither=effect==GuestOutputPaintEffect::kBilinearDither;
     info.codeSize=dither?(sharp?sizeof(sharp_dither_spirv):sizeof(cubic_dither_spirv)):(sharp?sizeof(sharp_spirv):sizeof(cubic_spirv));
     info.pCode=dither?(sharp?sharp_dither_spirv:cubic_dither_spirv):(sharp?sharp_spirv:cubic_spirv);
+    if(fsr) {
+      info.codeSize=dither?sizeof(fsr_easu_dither_spirv):sizeof(fsr_easu_spirv);
+      info.pCode=dither?fsr_easu_dither_spirv:fsr_easu_spirv;
+    }
     if(dfn.vkCreateShaderModule(device,&info,nullptr,&custom)==VK_SUCCESS) guest_output_paint_fs_[size_t(effect)]=custom;
     else std::fputs("AsterPresenter: spatial filter unavailable; using bilinear\n",stderr);
   }

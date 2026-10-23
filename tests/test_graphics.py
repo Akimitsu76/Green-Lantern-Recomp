@@ -112,3 +112,13 @@ class WindowsPresetTests(unittest.TestCase):
         from unittest.mock import patch
         with patch.object(graphics.sys, 'platform', 'win32'):
             self.assertEqual(graphics.from_options('high', upscaler='sharp')['upscaler'], 'sharp')
+
+
+class FsrEasuTests(unittest.TestCase):
+    def test_explicit_easu_selects_custom_and_keeps_guest_at_720p(self):
+        data=graphics.from_options('high', upscaler='fsr1', output_resolution='1920x1080')
+        self.assertEqual(data['preset'], 'custom')
+        self.assertEqual(data['upscaler'], 'fsr1')
+        self.assertEqual(data['render_scale'], 1)
+        self.assertEqual(graphics.apply_preset('custom', data)['upscaler'], 'fsr1')
+        self.assertEqual(graphics.validate(data), data)
